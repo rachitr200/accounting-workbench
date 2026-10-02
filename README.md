@@ -1,30 +1,164 @@
-# Accounting Workbench
+# TMP Accounting Workbench
 
-An accounting operations prototype developed by Rachit Raj for TMP, focused on CRM workflows, onboarding, time budgets, reconciliation, and invoice review. This standalone project is not yet connected to TMP's existing CRM.
+An accounting operations prototype developed by **Rachit Raj for TMP**. It brings client onboarding, job budgets, staff time, reconciliation review, invoices, reminder preparation, and source-based knowledge lookup into one workspace.
 
-## Shareable demo
+The project prioritizes CRM workflows and operational reliability, followed by accounting automation and a private knowledge assistant. It provides a working foundation for evaluating these workflows before integrating them with TMP’s existing systems.
 
-- Live app: https://rachit-accounting-workbench.onrender.com
-- Source: https://github.com/rachitr200/accounting-workbench
-- Health: https://rachit-accounting-workbench.onrender.com/api/health
+**Current stage:** deployed standalone prototype with synthetic data. It does not contain or complete TMP’s existing CRM, connect to live bank accounts, execute payments, or provide a trained tax model.
 
-Frontend and backend are deployed together. Use fictional records only. The public version supports the working workflows and source lookup; a generative model is not hosted.
+[Live application](https://rachit-accounting-workbench.onrender.com) · [Source code](https://github.com/rachitr200/accounting-workbench) · [Health endpoint](https://rachit-accounting-workbench.onrender.com/api/health)
 
-## Run it
+## Project objectives
 
-The frontend production build is included. Python 3.9+ and internet access for first-time package installation are required. Node 18+ is needed only if rebuilding the frontend.
+- Reduce repeated administrative work across client onboarding, follow-ups, and accounting operations.
+- Make outstanding documents, transaction exceptions, duplicate invoices, and budget overruns visible.
+- Keep consequential decisions under staff review.
+- Support repeatable procedures, staff training, and measurable pilot outcomes.
+- Establish a foundation for integrating approved knowledge sources and privately hosted AI.
 
-On macOS, open `start.command` in Terminal. Or from this project folder:
+## Features
+
+| Module | Implemented functionality | Current boundary |
+| --- | --- | --- |
+| Overview | Outstanding-document counts, transaction review queue, overdue receivables, and job capacity | Calculated from the workspace’s sample records |
+| Clients & leads | Create clients, track Lead → Onboarding → Active, manage document checklists | Tracks receipt status; does not upload, store, or inspect documents |
+| Jobs & time | Create budgeted jobs, record staff time by date, calculate remaining hours and overruns | No payroll, billing, or timesheet approval integration |
+| Reconciliation | Import bank and ledger CSVs, propose matches, identify ambiguous candidates, approve and reverse matches | Review workflow only; no bank connection or posting to a general ledger |
+| Accounts payable | Record bills, detect possible duplicates by supplier and reference, approve or reject records | Approval does not initiate payment |
+| Accounts receivable | Track open invoices, identify overdue items, prepare reminders | No live settlement, partial-payment allocation, or credit-note handling |
+| Reminder drafts | Individual and batch draft creation, same-day duplicate prevention, explicit review | Browser actions never send email |
+| Knowledge desk | Register source text, filter by jurisdiction/year, retrieve relevant excerpts, optional local-model drafting | Public deployment provides source lookup only; no authoritative tax corpus is bundled |
+| Activity & export | Record workflow changes and export a JSON snapshot | Not an immutable audit system or a backup/restore service |
+| Rollout & impact | Save acceptance-check evidence and before/after timing observations | Verification and measurements are entered by users, not independently certified |
+| Staff playbook | Step-by-step procedures, failure recovery, reusable prompts, and integration handover guidance | Procedures must be adapted and approved for TMP’s actual processes |
+
+## How the application works
+
+### 1. Client onboarding
+
+1. Create a lead with its service and contact details.
+2. Move the client into onboarding and review its document checklist.
+3. Prepare a reminder for outstanding documents.
+4. Mark documents received after staff confirmation.
+5. Activate the client once all required checklist items are complete.
+
+Activation is blocked when required documents remain outstanding. Marking a required document missing returns an active client to onboarding.
+
+### 2. Job allocation and time budgets
+
+1. Create a job linked to a client and set its budget in minutes.
+2. Record staff time against that job, including the work date and notes.
+3. Compare total recorded time with the budget.
+4. Review overruns and remaining capacity on the dashboard.
+
+Time uses integer minutes. The application validates positive durations and limits each entry to 24 hours; this is not a daily cross-job scheduling or payroll system.
+
+### 3. Reconciliation review
+
+1. Import bank transactions and ledger entries using the supplied CSV structure.
+2. The backend identifies candidates with equal signed amounts, matching currencies, and dates within three days.
+3. Matching references rank candidates ahead of candidates requiring additional review.
+4. A staff member checks the records and explicitly approves a match.
+5. A ledger entry can be matched only once; an approval can be reversed.
+
+For example, a sample CAD 2,400 bank receipt and matching ledger receipt may be proposed together. Multiple equal-value candidates remain a review decision. Equal amounts alone do not establish a correct match.
+
+Money is stored as integer cents. Imports are transactional: identical repeated IDs are skipped, while an ID with conflicting data rejects the batch. Foreign-exchange conversion, partial matches, multiple bank accounts, and one-to-many matching remain future work.
+
+### 4. Invoice review and follow-ups
+
+1. Record a payable or receivable with its reference, amount, currency, and due date.
+2. Review possible duplicate payables before approval.
+3. Identify overdue receivables and prepare reminder drafts.
+4. Verify recipients and wording before marking drafts reviewed.
+
+The batch follow-up workflow prepares onboarding and overdue-invoice drafts without creating duplicates for the same item on the same day. It does not schedule or send messages automatically. Reconciliation approval does not automatically settle invoices.
+
+### 5. Knowledge lookup and optional AI drafting
+
+1. Add approved source text with its title, jurisdiction, year, and optional source URL.
+2. Ask a question for a selected jurisdiction and year.
+3. The backend retrieves eligible excerpts using keyword matching.
+4. With no configured model, the application displays source-based lookup results.
+5. In local mode, an optional Ollama-compatible model can draft an answer from the retrieved excerpts.
+
+The application abstains when no eligible source matches. Model-generated drafts must contain valid retrieved-source identifiers; invalid citation identifiers cause the draft to be withheld. This check does not prove factual accuracy or that a cited source supports every claim.
+
+The bundled source is a fictional onboarding procedure. A production tax assistant needs a maintained Canadian/U.S. source collection, effective-date handling, stronger retrieval, and expert evaluation. No model weights or embeddings service are included, and no cloud-model fallback is used.
+
+### 6. Rollout and impact tracking
+
+The rollout checklist starts with the existing CRM, then onboarding, job budgets, reminders, reconciliation, invoices, knowledge support, and staff handover. A check cannot be marked verified without recorded evidence.
+
+Pilot measurements use:
+
+```text
+Weekly time reduction = (before minutes per run − after minutes per run) × runs per week
+```
+
+Include review and correction time in observations. Negative results are preserved when the new workflow takes longer. These calculations describe user-entered timing observations, not automatically measured savings or financial return on investment.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Browser[React workspace] -->|Same-origin API requests| API[FastAPI application]
+    API --> Validation[Pydantic validation and workflow rules]
+    Validation --> DB[(SQLite workspace)]
+    API --> Retrieval[Approved-source keyword lookup]
+    Retrieval -. Optional local mode .-> Model[Loopback Ollama-compatible server]
+    Operator[Operator-controlled command] -. Separately configured .-> SMTP[Reviewed email adapter]
+```
+
+| Layer | Technology and responsibility |
+| --- | --- |
+| Frontend | React 18, Vite, CSS, and Lucide icons |
+| API | FastAPI routes for workspace operations |
+| Validation | Pydantic schemas plus workflow checks |
+| Storage | SQLite for clients, jobs, time, invoices, matches, drafts, sources, activity, and rollout records |
+| AI adapter | Optional loopback connection to an installed Ollama-compatible model |
+| Packaging | Multi-stage Docker build using Node 22 and Python 3.12 |
+| Hosting | Render web service serving both frontend assets and API |
+| Checks | Pytest workflow tests and a frontend build through GitHub Actions |
+
+Core financial checks are deterministic code. An LLM does not calculate balances, approve matches, initiate payments, or modify records. Generative AI is optional and limited to drafting knowledge answers.
+
+## Repository structure
+
+```text
+backend/
+  main.py                  API, database, validation, and model adapter
+  send_reviewed.py         Operator-controlled SMTP sender
+  requirements-lock.txt    Pinned Python dependencies
+  .env.example             Configuration reference; not loaded automatically
+frontend/
+  src/App.jsx              Main workspace and accounting workflows
+  src/Enablement.jsx       Rollout, impact tracking, and staff playbook
+  src/style.css            Application styling
+  dist/                    Compiled frontend
+examples/                  Synthetic bank and ledger CSVs
+tests/                     Workflow and public-session tests
+.github/workflows/         Automated checks
+Dockerfile                 Combined frontend/backend image
+render.yaml                Public demonstration deployment
+start.command              macOS local launcher
+```
+
+## Run locally
+
+Use Python 3.12 and Node 22 to match the container and automated-check environments. The compiled frontend is included; Node is needed when rebuilding it. Initial dependency installation requires internet access.
 
 ```sh
+git clone https://github.com/rachitr200/accounting-workbench.git
+cd accounting-workbench
 python3 -m venv .venv
 .venv/bin/python -m pip install -r backend/requirements-lock.txt
 .venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
 ```
 
-Open http://127.0.0.1:8765. Keep the terminal running. The local SQLite database is created in `data/workbench.sqlite3`; records persist across restarts. If port 8765 is busy, stop the previous copy or choose another port. Production builds are served by the backend on the same origin.
+Open `http://127.0.0.1:8765`. On macOS, `start.command` is also available. Local records are stored in `data/workbench.sqlite3` and persist across restarts. Keep local mode bound to localhost.
 
-For frontend development:
+To develop the frontend, keep the backend running and use another terminal:
 
 ```sh
 cd frontend
@@ -32,89 +166,179 @@ npm ci
 npm run dev
 ```
 
-Start the backend on 8765 in a second terminal. Vite proxies `/api` to it. Use `npm run build` after changes and restart the backend if the build directory was not present at startup.
+Vite proxies `/api` requests to the backend on port 8765. Rebuild the packaged frontend with:
 
-## What works
+```sh
+npm --prefix frontend run build
+```
 
-1. **CRM foundation:** create leads and clients, progress to onboarding, maintain document checklists, and activate after required documents are marked received. Marking a document missing moves an active client back to onboarding. This is checklist tracking, not file storage or verification of document contents.
-2. **Jobs and staff time:** create budgeted jobs, record dated staff time, see remaining hours and overruns. There is no payroll integration or financial billing calculation.
-3. **Follow-up workflow:** template-based client and overdue-invoice reminder drafts; batch generation; same-day duplicate prevention; explicit reviewed state. Browser actions never send email. A separately configured SMTP sender is included for operator-controlled use; dry-run is the default.
-4. **Bank reconciliation:** import signed amounts from CSV, propose equal-amount/currency matches within three days, flag ambiguity, explicitly approve or reverse matches. Matching does not post to accounting software or settle AR/AP. Import is transactional; repeated identical IDs are skipped and conflicting IDs reject the entire batch.
-5. **Accounts payable:** record invoices, identify possible duplicates by supplier and reference, block duplicate approvals, reject duplicates, and record approval. No payments are initiated.
-6. **Accounts receivable:** record invoices, identify overdue records and prepare reminder drafts. Live settlement, partial payments, aging policy, credit notes and collections scheduling are not implemented.
-7. **Knowledge desk:** add reviewed source text with jurisdiction and year; retrieve excerpts; optionally produce a draft through a locally hosted Ollama-compatible model. It abstains when no eligible source matches. The bundled source is a fictional procedure, not legislation.
-8. **Activity and export:** local change log and JSON snapshot. This is not an immutable audit trail or a restore/backup service.
+### Import format
 
-## JD additions, with CRM first
+Use Reconciliation → Import CSV with `examples/bank.csv` and `examples/ledger.csv`.
 
-- **Rollout & impact:** ordered CRM-first acceptance checks, evidence-required verification, and saved pilot timing observations across CRM, accounting, tax, client service, marketing and internal operations. Net time reduction includes negative results. Figures are user-entered observations, not measured ROI.
-- **Staff playbook:** onboarding, reconciliation, source review and failure-recovery procedures; reusable client-service, tax-source and marketing prompts; integration handover guidance. Templates do not invoke external models or publish messages.
-- The prototype does not establish that TMP’s CRM is complete, integrations are active, or a trained tax model is deployed.
+```csv
+id,description,reference,amount_cents,currency,txn_date
+sample-001,Sample receipt,INV-001,125000,CAD,2026-10-01
+```
 
-## What is and is not an AI agent
+Use integer cents, CAD or USD, and ISO dates. Negative amounts represent outflows. Keep each dataset to one account and one consistent sign convention. The interface accepts up to 1,000 rows and 1 MB per import.
 
-Financial workflow controls are deterministic Python code with Pydantic validation. They do not need an LLM to compare amounts, calculate budgets, block duplicate approvals, or generate standard reminders. No LLM can approve a match, send money, or modify records.
+## Configuration
 
-The optional knowledge assistant is the only generative-AI feature. No model, embeddings service, API credential, or fabricated tax corpus is bundled. Without a configured local model, the UI explicitly shows source lookup only. There is no hidden cloud-model fallback.
+Export settings into the process environment or configure them through the hosting provider. `.env.example` is documentation, not an automatically loaded file.
 
-## Local model connection
+| Variable | Purpose |
+| --- | --- |
+| `PUBLIC_DEMO` | Set to `true` for isolated temporary browser workspaces; otherwise use localhost-only operation |
+| `SESSION_SECRET` | Required in public mode; at least 32 characters; keep out of source control |
+| `WORKBENCH_DB` | SQLite path; defaults to `data/workbench.sqlite3` |
+| `WORKBENCH_ALLOWED_HOSTS` | Additional permitted hostnames, comma-separated; not an authentication control |
+| `PORT` | Container listening port; defaults to `10000` |
+| `OLLAMA_MODEL` | Exact name of an already-installed local model |
+| `OLLAMA_URL` | Supported values: `http://127.0.0.1:11434` or `http://localhost:11434` |
+| `SMTP_ENABLED` | Explicitly set `true` only when configuring authorized operator-controlled sending |
+| `SMTP_HOST`, `SMTP_PORT` | Mail server and TLS port, 465 or 587 |
+| `SMTP_FROM`, `SMTP_USERNAME`, `SMTP_PASSWORD` | Approved sender and mail-service credentials |
 
-Run an Ollama-compatible server on `http://127.0.0.1:11434` with an appropriate model installed, then start the workbench with the exact model name:
+Render’s external hostname is added to the allowed-host list automatically.
+
+### Optional local model
+
+Install and run an appropriate model in a local Ollama-compatible server, then launch the application with:
 
 ```sh
 export OLLAMA_MODEL='your-installed-model-name'
 .venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
 ```
 
-Select 'Use configured local model' in Knowledge desk. Only the documented loopback endpoint is accepted. The server receives the question and eligible source excerpts. Model weights and licences must be selected and checked for the intended deployment; the app does not download them or select a hardware size for you.
+Choose **Use configured local model** in Knowledge desk. Public-demo mode disables generation even when a model name is configured. In a Docker container, loopback refers to that container; the existing adapter will not connect to a separate model container or remote host without implementation changes. Model selection, licence review, hardware sizing, and live-model evaluation are still required.
 
-Retrieval currently uses keywords, jurisdiction and year filters. This is not a production tax RAG system. Citation IDs are checked for membership in the retrieved sources, but that does not establish that a claim is entailed or legally correct. Accountants must review outputs. Tax-year tagging alone does not model effective dates, amendments, superseded provisions, or federal/provincial/state differences. These are required extensions before a real tax assistant.
+### Optional reviewed email delivery
 
-The model adapter is covered by mocked contract tests. A real local model was not installed or exercised during this build.
+The standalone adapter lists eligible reviewed drafts without contacting a mail server:
 
-## Sample import
-
-Open Reconciliation > Import CSV. Import `examples/ledger.csv` into ledger entries and `examples/bank.csv` into bank transactions. Columns must be exactly:
-
-```text
-id,description,reference,amount_cents,currency,txn_date
+```sh
+.venv/bin/python -m backend.send_reviewed
 ```
 
-Use integer cents (125000 means CAD 1,250.00), CAD or USD, and ISO dates. Negative amounts represent outflows. A dataset should represent one account with one consistent signed-amount convention. Multi-account reconciliation, foreign-exchange conversion, partial matches and one-to-many matches are not implemented. Up to 1,000 rows / 1 MB per import in the UI.
+Sending a particular draft requires explicit configuration and an explicit command:
 
-## Verification
+```sh
+.venv/bin/python -m backend.send_reviewed --id <draft-id> --send
+```
+
+The adapter rejects sample/reserved recipient domains, uses TLS, claims the draft before sending, and holds uncertain outcomes for manual review. It targets the configured local database, not a public visitor’s workspace. SMTP acceptance is not proof of delivery. No live provider was exercised in the current verification.
+
+## Deployment for TMP
+
+### Current public demonstration
+
+The included Render Blueprint creates one free Docker web service. It builds React and serves the compiled frontend through FastAPI, so the frontend and backend use the same HTTPS origin without a separate public API URL.
+
+1. Connect this repository to Render and create a Blueprint from `render.yaml`.
+2. Keep `PUBLIC_DEMO=true`; the Blueprint generates `SESSION_SECRET`.
+3. Deploy and check `/api/health`.
+4. Open the application and exercise the sample workflows.
+
+Public mode uses signed, secure, HTTP-only session cookies, separate temporary SQLite workspaces, request throttling, origin checks, host restrictions, and browser security headers. These controls support a sample-data demonstration; they are not staff login, role-based authorization, or production client isolation.
+
+The free deployment has temporary storage and may sleep when idle. Sample records can reset after a restart or redeploy. Use fictional data only.
+
+### TMP evaluation environment
+
+The current project can be evaluated on an individual workstation or in a restricted staging environment using synthetic records. The Docker image is portable, but no TMP cloud account, internal network, identity provider, or production infrastructure has been configured by this repository.
+
+A local container evaluation can use:
+
+```sh
+docker build -t tmp-accounting-workbench .
+docker run --rm -p 127.0.0.1:10000:10000 tmp-accounting-workbench
+```
+
+This example deliberately uses disposable storage and localhost access. It is not a production deployment command. For a shared staging environment, establish approved network access and identity controls first, use HTTPS, configure the exact hostname, and continue using synthetic data.
+
+### Integration with TMP’s existing CRM
+
+Begin with the existing system rather than assuming this prototype should replace it:
+
+1. Review the CRM codebase, stack, deployment process, unfinished features, defects, and data model.
+2. Agree on acceptance criteria for onboarding, leads, automated correspondence, job allocation, and time budgets.
+3. Decide which components belong in the existing CRM and which should remain a separate service.
+4. Map clients, jobs, invoices, and staff identifiers; define the system of record for each entity.
+5. Implement authenticated interfaces, migrations, duplicate prevention, and monitored background jobs.
+6. Validate end-to-end workflows with process owners before a staged rollout.
+
+The API in this prototype is not yet a production integration contract. Zapier, Make, n8n, accounting software, and email-provider integrations are not active.
+
+### Requirements before production client data
+
+| Area | Required implementation |
+| --- | --- |
+| Identity and access | TMP-approved sign-in/SSO, staff roles, least-privilege permissions, and enforceable client-level access |
+| Data storage | Production database design, schema migrations, encrypted storage, retention controls, and tested backup/restore |
+| Infrastructure | Approved hosting region, TLS, managed secrets, restricted network access, dependency maintenance, and monitoring |
+| Background operations | Durable job queue, retries with duplicate protection, failure alerts, and clear ownership |
+| Documents | Secure upload/storage, malware scanning, access checks, and retention policy |
+| Auditability | Actor-attributed events, protected audit retention, and review procedures |
+| Release process | Separate staging/production, acceptance tests, rollback plan, and staff sign-off |
+| Knowledge service | Approved source ingestion, provenance, model evaluation, access filtering, and accountant review |
+
+Changing the hostname or setting `PUBLIC_DEMO=false` does not supply these capabilities. A production database such as PostgreSQL would require code and migration work; it is not a configuration-only switch in the current SQLite implementation.
+
+## Development roadmap
+
+### Priority 1 — Complete the CRM workflows
+
+- Audit TMP’s existing CRM and convert remaining work into an agreed feature and defect backlog.
+- Integrate client onboarding, lead tracking, staff allocation, time approval, and budget reporting with its actual records.
+- Add authenticated access, database migrations, regression coverage, and a repeatable release process.
+- Connect the approved email provider, with templates, scheduling, review policies, delivery tracking, and duplicate protection.
+
+**Completion evidence:** process owners can complete the agreed workflows in staging, critical defects are resolved, and rollback and support procedures are tested.
+
+### Priority 2 — Connect accounting operations
+
+- Add approved bank/accounting-system interfaces and explicit account identifiers.
+- Extend matching to partial payments, one-to-many transactions, and documented exception handling.
+- Add invoice aging, settlement, partial-payment allocation, and credit notes.
+- Keep posting and payment actions behind defined approval rules and access controls.
+
+**Completion evidence:** representative records reconcile with the source systems, exceptions remain visible, and duplicate execution does not create duplicate financial actions.
+
+### Priority 3 — Build the private knowledge assistant
+
+- Benchmark suitable open-weight models against TMP-reviewed questions and deployment constraints.
+- Build a permitted, versioned Canadian/U.S. source collection with provenance and update ownership.
+- Add document parsing, stronger retrieval, jurisdiction-specific filters, effective dates, and superseded-source handling.
+- Evaluate factual support, citation accuracy, abstention, access isolation, latency, and running cost.
+- Pilot with staff before considering a client-facing portal.
+
+**Completion evidence:** an accountant-reviewed evaluation set meets agreed thresholds and unsupported or conflicting questions are handled safely. Fine-tuning should follow an identified evaluation need; it is not a substitute for current, retrievable sources.
+
+### Priority 4 — Improve adoption and measurable outcomes
+
+- Adapt the playbook into approved SOPs and short practical training sessions.
+- Assign workflow owners, support coverage, and manual fallbacks.
+- Measure completion rates, error/rework rates, staff adoption, time spent, and operating cost.
+- Version prompts and evaluate tool changes before adoption.
+- Expand into client-service and marketing workflows after core CRM and accounting priorities are stable.
+
+**Completion evidence:** staff can use the workflows independently, support ownership is clear, and measured outcomes justify continued use.
+
+## Testing and verification
 
 ```sh
 .venv/bin/python -m pytest tests -q
-cd frontend
-npm run build
+npm --prefix frontend run build
 ```
 
-Tests cover onboarding controls, reminder idempotency, duplicate payables, one-to-one matching, currency/date boundaries, atomic imports, integer-money validation, time limits, source filtering, unsupported questions, local model contracts, origin restrictions, persistence and logging.
+The current suite contains 22 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
 
-## Source references
+Live checks have confirmed frontend/API connectivity, saved sample records, separate visitor workspaces, and saved impact calculations. These checks do not establish compatibility with TMP’s CRM, production security, tax-answer accuracy, or performance at scale. Real model inference, live email delivery, bank connections, and payment integrations have not been validated.
 
-- https://github.com/rachitr200/acto-superagent — reference commit `82b2a8b`: React/FastAPI structure and structured model responses. The latest repository uses OpenAI; the supplied archive used Anthropic. Its CRM actions are suggestions, not a deployed CRM integration.
-- https://github.com/rachitr200/freight-bidding-agent — reference commit `658765d`: staged workflow, Pydantic schemas and activity-tracking patterns. This workbench implements accounting-specific controls rather than copying freight scoring or fallback decisions.
+## Related projects
 
-The React/Vite dependency setup was retained from the SuperAgent project. The accounting UI, SQLite storage, financial review rules, import flow and tests are new implementation. This prototype does not use LangGraph; staged deterministic operations and a small model adapter are sufficient for its current scope.
+- [ACTO SuperAgent](https://github.com/rachitr200/acto-superagent): React/FastAPI structure and structured-response patterns.
+- [Freight Bidding Agent](https://github.com/rachitr200/freight-bidding-agent): staged workflow, validation, and activity-tracking patterns.
 
-## Before connecting to TMP
-
-Local mode is a single-operator application and must stay on localhost. Public demo mode gives each browser a separate temporary sample workspace using a signed session cookie. This is not production user authentication or business tenant isolation. Neither mode provides role authorization, encrypted database storage, tamper-proof auditing, malware-scanned document storage, backups or production monitoring. Use fictional data only. It is not a certified compliance product, accountant replacement, trained tax model, or finished TMP CRM.
-
-The next implementation must begin with TMP's codebase, stack, access permissions, defect list, acceptance criteria, accounting system interfaces and approved email provider. Add identity and access control, proper source provenance, evaluation by tax experts, migrations/backups, operational monitoring, and a controlled rollout.
-
-## Optional email adapter
-
-`python -m backend.send_reviewed` lists eligible reviewed drafts without connecting to any mail service. Sending requires both `--id <draft-id> --send` and `SMTP_ENABLED=true`, plus SMTP_HOST, SMTP_PORT (465 or 587), SMTP_FROM, SMTP_USERNAME and SMTP_PASSWORD in the process environment. Do not put secrets in source control. The adapter refuses sample/reserved recipient domains. It uses TLS, claims a reviewed draft before sending, and marks uncertain outcomes for manual review rather than retrying automatically. SMTP acceptance is not proof of delivery. Sending was not exercised against a live provider during this build.
-
-A scheduled automatic sender is deliberately not enabled. It requires an approved provider, real identity/access controls, reviewed automation policies, and confirmed recipients. The batch-draft endpoint `/api/automations/followups` can prepare reminders repeatedly without creating duplicates for the same item on the same day.
-
-## Public demo on Render
-
-The included `render.yaml` deploys one free Docker web service. The React frontend and FastAPI backend share one HTTPS origin; no separate API URL is required. The Docker build compiles the frontend from source.
-
-Set `PUBLIC_DEMO=true` and a generated `SESSION_SECRET` (at least 32 characters). The Blueprint generates this secret automatically. Each visitor receives a separate temporary SQLite workspace. Public mode disables local model generation and real email sending is not exposed through the API. Source lookup and sample accounting workflows remain available.
-
-Render free services may sleep when idle and their local storage is temporary. Sample changes can disappear on restart or redeploy; this deployment is for demonstrations only. Do not enter real client data.
+Accounting Workbench adds accounting-specific interfaces, SQLite persistence, review rules, imports, and tests. Its current workflows use deterministic operations and an optional model adapter; it does not use LangGraph.
