@@ -1,0 +1,5 @@
+id,description,reference,amount_cents,currency,txn_date
+l-demo-1,Sample customer receipt,DEMO-101,125000,CAD,2026-10-01
+l-demo-2,Sample software expense,DEMO-202,-8900,CAD,2026-10-02
+l-demo-3,Possible deposit A,DEP-A,35000,CAD,2026-10-02
+l-demo-4,Possible deposit B,DEP-B,35000,CAD,2026-10-02

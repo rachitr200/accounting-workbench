@@ -1,0 +1,4 @@
+id,description,reference,amount_cents,currency,txn_date
+b-demo-1,Sample customer payment,DEMO-101,125000,CAD,2026-10-02
+b-demo-2,Sample software payment,DEMO-202,-8900,CAD,2026-10-02
+b-demo-3,Unidentified deposit,,35000,CAD,2026-10-02

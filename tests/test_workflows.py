@@ -1,0 +1,224 @@
+import importlib.util
+from datetime import date,timedelta
+from pathlib import Path
+import json
+import pytest
+from fastapi.testclient import TestClient
+
+@pytest.fixture
+def ctx(tmp_path,monkeypatch):
+    monkeypatch.setenv('WORKBENCH_DB',str(tmp_path/'test.sqlite3'))
+    monkeypatch.delenv('OLLAMA_MODEL',raising=False)
+    spec=importlib.util.spec_from_file_location('workbench_test',Path(__file__).parents[1]/'backend'/'main.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module,TestClient(module.app)
+
+def post(c,path,p=None):return c.post('/api/'+path,json=p or {})
+def state(c):return c.get('/api/state').json()
+def test_seed_is_idempotent_and_valid(ctx):
+    m,c=ctx;m.seed();s=state(c)
+    assert len(s['clients'])==3
+    assert all(all(d['received'] for d in x['documents']) for x in s['clients'] if x['stage']=='Active')
+def test_onboarding_requires_documents(ctx):
+    _,c=ctx
+    assert post(c,'clients/c2/stage',{'stage':'Active'}).status_code==409
+    for i in range(3):assert post(c,'clients/c2/document',{'index':i,'received':True}).status_code==200
+    assert post(c,'clients/c2/stage',{'stage':'Active'}).status_code==200
+    post(c,'clients/c2/document',{'index':1,'received':False})
+    assert next(x for x in state(c)['clients'] if x['id']=='c2')['stage']=='Onboarding'
+def test_drafts_are_idempotent_and_never_sent(ctx):
+    _,c=ctx
+    a=post(c,'clients/c2/reminder').json();b=post(c,'clients/c2/reminder').json()
+    assert a['id']==b['id'] and b['existing']
+    assert post(c,'drafts/'+a['id']+'/approve').json()['sent'] is False
+    assert state(c)['drafts'][0]['status']=='Reviewed'
+def test_batch_idempotency(ctx):
+    _,c=ctx
+    a=post(c,'automations/followups').json();b=post(c,'automations/followups').json()
+    assert a['created']>=1 and b['created']==0 and a['sent']==0
+    assert b['reused']==a['created']
+def test_duplicate_payables_block_until_rejected(ctx):
+    _,c=ctx
+    assert post(c,'invoices/ap1/approve').status_code==409
+    assert post(c,'invoices/ap2/reject').status_code==200
+    assert post(c,'invoices/ap1/approve').status_code==200
+    assert post(c,'invoices/ap1/approve').status_code==409
+    assert post(c,'invoices/ar1/approve').status_code==409
+
+def test_matches_require_review_and_are_one_to_one(ctx):
+    _,c=ctx;s=state(c)
+    assert len(next(b for b in s['bank'] if b['id']=='b3')['candidates'])==2
+    assert not next(b for b in s['bank'] if b['id']=='b3')['match']
+    assert post(c,'matches',{'bank_id':'b1','ledger_id':'l2'}).status_code==422
+    assert post(c,'matches',{'bank_id':'b1','ledger_id':'l1'}).status_code==200
+    assert post(c,'matches',{'bank_id':'b1','ledger_id':'l1'}).status_code==409
+    assert post(c,'matches/b1/undo').status_code==200
+    assert post(c,'matches/b1/undo').status_code==409
+
+def test_match_currency_and_date_boundaries(ctx):
+    _,c=ctx
+    tx={'id':'l-usd','description':'Test','reference':'INV-1042','amount_cents':240000,'currency':'USD','txn_date':'2026-10-01'}
+    assert post(c,'transactions/import',{'target':'ledger','transactions':[tx]}).status_code==200
+    assert post(c,'matches',{'bank_id':'b1','ledger_id':'l-usd'}).status_code==422
+    tx.update(id='l-late',currency='CAD',txn_date='2026-10-20')
+    post(c,'transactions/import',{'target':'ledger','transactions':[tx]})
+    assert post(c,'matches',{'bank_id':'b1','ledger_id':'l-late'}).status_code==422
+
+def test_import_is_atomic_and_repeatable(ctx):
+    _,c=ctx
+    tx={'id':'b-test','description':'Test','reference':'ABC','amount_cents':12345,'currency':'CAD','txn_date':'2026-10-01'}
+    assert post(c,'transactions/import',{'target':'bank','transactions':[tx]}).json()['imported']==1
+    assert post(c,'transactions/import',{'target':'bank','transactions':[tx]}).json()['skipped']==1
+    new={**tx,'id':'b-new'};bad={**tx,'amount_cents':12346}
+    assert post(c,'transactions/import',{'target':'bank','transactions':[new,bad]}).status_code==409
+    assert all(b['id']!='b-new' for b in state(c)['bank'])
+
+def test_input_validation_and_job_totals(ctx):
+    _,c=ctx
+    p={'job_id':'j1','staff':'Jamie','minutes':90,'work_date':date.today().isoformat(),'note':'Review'}
+    before=next(j for j in state(c)['jobs'] if j['id']=='j1')['used_minutes']
+    assert post(c,'time',p).status_code==200
+    assert next(j for j in state(c)['jobs'] if j['id']=='j1')['used_minutes']==before+90
+    assert post(c,'time',{**p,'minutes':-1}).status_code==422
+    assert post(c,'time',{**p,'minutes':1500}).status_code==422
+    assert post(c,'time',{**p,'minutes':1440}).status_code==422
+    assert post(c,'time',{**p,'work_date':(date.today()+timedelta(days=1)).isoformat()}).status_code==422
+    assert post(c,'invoices',{'kind':'AP','party':'Test','reference':'x','amount_cents':1.5,'due_date':'2026-10-01'}).status_code==422
+    assert post(c,'clients',{'name':'AA','email':'bad','service':'Books'}).status_code==422
+
+def test_knowledge_segregates_jurisdiction_and_year(ctx):
+    _,c=ctx
+    p={'question':'What documents are required for onboarding?','jurisdiction':'CA','tax_year':2026}
+    assert post(c,'knowledge/ask',p).json()['citations'][0]['id']=='s1'
+    assert post(c,'knowledge/ask',{**p,'jurisdiction':'US'}).json()['citations']==[]
+    assert post(c,'knowledge/ask',{**p,'tax_year':2025}).json()['citations']==[]
+    assert post(c,'knowledge/ask',{**p,'question':'Capital gains rate?'}).json()['citations']==[]
+    assert post(c,'knowledge/ask',{**p,'use_model':True}).status_code==503
+
+def test_unapproved_source_not_retrieved(ctx):
+    _,c=ctx
+    p={'title':'Unreviewed sample','body':'Sample instructions about pineapples and demonstrations.','jurisdiction':'US','tax_year':2026,'approved':False}
+    assert post(c,'sources',p).status_code==200
+    assert post(c,'knowledge/ask',{'question':'pineapples','jurisdiction':'US','tax_year':2026}).json()['citations']==[]
+
+def test_local_model_success_and_bad_citation(ctx,monkeypatch):
+    m,c=ctx;monkeypatch.setenv('OLLAMA_MODEL','test-only')
+    class Reply:
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def read(self,*a):return json.dumps({'message':{'content':'Collect the engagement letter. [s1]'}}).encode()
+    monkeypatch.setattr(m.urllib.request,'urlopen',lambda *a,**k:Reply())
+    p={'question':'Onboarding documents','jurisdiction':'CA','tax_year':2026,'use_model':True}
+    assert post(c,'knowledge/ask',p).json()['mode'].startswith('Local AI draft')
+    Reply.read=lambda *a:json.dumps({'message':{'content':'An unsupported answer [invented]'}}).encode()
+    assert 'withheld' in post(c,'knowledge/ask',p).json()['mode']
+
+def test_origin_and_content_type_guard(ctx):
+    _,c=ctx
+    assert c.post('/api/clients',json={},headers={'origin':'https://untrusted.example'}).status_code==403
+    assert c.post('/api/clients',content='{}',headers={'content-type':'text/plain'}).status_code==415
+
+def test_changes_persist_and_audit(ctx):
+    m,c=ctx
+    x=post(c,'clients',{'name':'New sample','email':'a@example.test','service':'Books'}).json()
+    with m.database() as db:assert m.one(db,'clients',x['id'])['name']=='New sample'
+    assert state(c)['audit'][0]['action']=='Client created'
+    assert c.get('/api/export').status_code==200
+
+def sender_module(m,monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules,'main',m)
+    spec=importlib.util.spec_from_file_location('sender_test',Path(__file__).parents[1]/'backend'/'send_reviewed.py')
+    sender=importlib.util.module_from_spec(spec);spec.loader.exec_module(sender)
+    return sender
+
+def test_email_defaults_to_dry_run(ctx,monkeypatch):
+    m,c=ctx;s=sender_module(m,monkeypatch)
+    d=post(c,'clients/c2/reminder').json()['id'];post(c,'drafts/'+d+'/approve')
+    monkeypatch.setattr(s.smtplib,'SMTP_SSL',lambda *a,**k:pytest.fail('Dry-run must not open SMTP'))
+    assert s.send_reviewed(d)[0]['action']=='dry-run; nothing sent'
+    with pytest.raises(ValueError):s.send_reviewed(d,True)
+    with pytest.raises(ValueError):s.valid_address('person@example.com')
+
+def smtp_fixture(m,c,s,monkeypatch):
+    ident=post(c,'clients/c2/reminder').json()['id'];post(c,'drafts/'+ident+'/approve')
+    with m.database(True) as db:db.execute('UPDATE drafts SET recipient=? WHERE id=?',('client@firm.internal',ident))
+    for k,v in {'SMTP_ENABLED':'true','SMTP_HOST':'smtp.internal','SMTP_USERNAME':'test','SMTP_PASSWORD':'test','SMTP_FROM':'sender@firm.internal'}.items():monkeypatch.setenv(k,v)
+    return ident
+
+def test_mock_smtp_success_not_resent(ctx,monkeypatch):
+    m,c=ctx;s=sender_module(m,monkeypatch);ident=smtp_fixture(m,c,s,monkeypatch)
+    class SMTP:
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def login(self,*a):pass
+        def send_message(self,msg):return {}
+    monkeypatch.setattr(s.smtplib,'SMTP_SSL',lambda *a,**k:SMTP())
+    assert 'accepted' in s.send_reviewed(ident,True)[0]['action']
+    assert state(c)['drafts'][0]['status']=='Sent'
+    with pytest.raises(ValueError):s.send_reviewed(ident,True)
+
+def test_mock_smtp_uncertain_outcome_needs_review(ctx,monkeypatch):
+    m,c=ctx;s=sender_module(m,monkeypatch);ident=smtp_fixture(m,c,s,monkeypatch)
+    def broken(*a,**k):raise TimeoutError()
+    monkeypatch.setattr(s.smtplib,'SMTP_SSL',broken)
+    with pytest.raises(RuntimeError):s.send_reviewed(ident,True)
+    assert state(c)['drafts'][0]['status']=='Needs review'
+    with pytest.raises(ValueError):s.send_reviewed(ident,True)
+
+@pytest.fixture
+def hosted(tmp_path,monkeypatch):
+    monkeypatch.setenv('PUBLIC_DEMO','true')
+    monkeypatch.setenv('SESSION_SECRET','test-secret-only-not-for-deployment-1234567890')
+    monkeypatch.setenv('WORKBENCH_DB',str(tmp_path/'public.sqlite3'))
+    spec=importlib.util.spec_from_file_location('hosted_test',Path(__file__).parents[1]/'backend'/'main.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module,TestClient(module.app,base_url='https://testserver'),TestClient(module.app,base_url='https://testserver')
+
+def test_public_demo_isolates_visitors(hosted):
+    _,a,b=hosted
+    assert state(a)['public_demo'] is True
+    state(b)
+    created=post(a,'clients',{'name':'Visitor A only','email':'a@example.test','service':'Demo'}).json()['id']
+    assert any(x['id']==created for x in state(a)['clients'])
+    assert all(x['id']!=created for x in state(b)['clients'])
+    assert post(b,'clients/'+created+'/stage',{'stage':'Onboarding'}).status_code==404
+
+def test_public_demo_cookie_and_access_guards(hosted):
+    _,a,b=hosted
+    assert post(a,'clients',{}).status_code==403
+    r=a.get('/api/state')
+    assert 'Secure' in r.headers['set-cookie'] and 'HttpOnly' in r.headers['set-cookie']
+    assert r.headers['cache-control']=='no-store'
+    assert post(a,'knowledge/ask',{'question':'onboarding documents','jurisdiction':'CA','tax_year':2026,'use_model':True}).status_code==503
+    b.cookies.set('workbench_session','0'*32+'.forged')
+    assert post(b,'automations/followups').status_code==403
+    assert a.post('/api/automations/followups',json={},headers={'origin':'https://evil.example'}).status_code==403
+    assert a.get('/api/health').json()['status']=='ok'
+
+def test_public_demo_rate_limit(hosted):
+    m,a,b=hosted
+    state(a)
+    ident=m.session_id(a.cookies.get('workbench_session'))
+    m.RATE_BUCKETS[ident].extend([m.time.monotonic()]*90)
+    assert a.get('/api/state').status_code==429
+    assert b.get('/api/state').status_code==200
+
+def test_rollout_requires_evidence_and_known_item(ctx):
+    _,c=ctx
+    assert post(c,'rollout/crm',{'status':'Verified','note':''}).status_code==422
+    assert post(c,'rollout/unknown',{'status':'In progress'}).status_code==404
+    assert post(c,'rollout/crm',{'status':'Verified','note':'Sample checklist reviewed by demo owner.'}).status_code==200
+    assert post(c,'rollout/crm',{'status':'In progress','note':'Retesting changes.'}).status_code==200
+    assert len(state(c)['rollout'])==1
+    assert state(c)['rollout'][0]['status']=='In progress'
+
+def test_pilot_measurements_preserve_negative_results(ctx):
+    _,c=ctx
+    p={'title':'Document follow-ups','area':'CRM','weekly_runs':5,'before_minutes':10,'after_minutes':15,'evidence':'Five sample runs including review time.'}
+    assert post(c,'improvements',p).status_code==200
+    x=state(c)['improvements'][0]
+    assert (x['before_minutes']-x['after_minutes'])*x['weekly_runs']==-25
+    assert post(c,'improvements',{**p,'weekly_runs':0}).status_code==422
+    assert post(c,'improvements',{**p,'before_minutes':-1}).status_code==422
+    assert post(c,'improvements',{**p,'area':'Invalid'}).status_code==422
