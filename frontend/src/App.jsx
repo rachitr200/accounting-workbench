@@ -901,7 +901,7 @@ export default function App() {
                 <BookOpen size={20} />
                 <div>
                   <strong>
-                    {data.model_configured
+                    {data.knowledge_model_configured
                       ? "Local model configured — availability checked when used"
                       : "Source lookup available · local AI model not connected"}
                   </strong>
@@ -974,7 +974,7 @@ export default function App() {
                       <input
                         type="checkbox"
                         name="use_model"
-                        disabled={!data.model_configured}
+                        disabled={!data.knowledge_model_configured}
                       />
                       Use configured local model to draft an answer
                     </label>

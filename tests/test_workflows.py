@@ -245,3 +245,79 @@ def test_operations_workflow_atomic_failure(ctx,monkeypatch):
     with m.database() as db:
         assert db.execute('SELECT COUNT(*) FROM workflow_runs').fetchone()[0]==0
         assert db.execute('SELECT COUNT(*) FROM drafts').fetchone()[0]==0
+
+def simulated_agent(m,monkeypatch,invalid=False):
+    monkeypatch.setenv('OLLAMA_MODEL','test-model')
+    calls=iter([m.AgentStep(action='read',area='invoices'),m.AgentStep(action='finish',summary='Review possible duplicate bills.',recommendations=['Compare supplier records before approving.'],evidence_ids=['invoices:invented' if invalid else 'invoices:ap1'])])
+    monkeypatch.setattr(m,'agent_model',lambda messages:next(calls))
+
+def test_ai_investigation_and_review(ctx,monkeypatch):
+    m,c=ctx;simulated_agent(m,monkeypatch)
+    run=post(c,'workflows/operations',{'run_key':'ai-test'}).json()['run_id']
+    review=post(c,'workflows/'+run+'/investigate').json()['id']
+    assert state(c)['agent_reviews'][0]['status']=='Awaiting review'
+    assert post(c,'agent-reviews/'+review+'/decision',{'decision':'Approved','reviewer':'Test accountant','note':'Compared the sample supplier invoice records.'}).json()['executed'] is False
+    assert post(c,'agent-reviews/'+review+'/decision',{'decision':'Approved','reviewer':'Test accountant','note':'Compared the sample supplier invoice records.'}).status_code==409
+    assert all(x['status']=='Review' for x in state(c)['invoices'] if x['kind']=='AP')
+
+def test_ai_fabricated_evidence_is_withheld(ctx,monkeypatch):
+    m,c=ctx;simulated_agent(m,monkeypatch,True)
+    run=post(c,'workflows/operations',{'run_key':'bad-ai-test'}).json()['run_id']
+    assert post(c,'workflows/'+run+'/investigate').status_code==502
+    assert state(c)['agent_reviews'][0]['status']=='Failed'
+
+def test_ai_stale_proposal_cannot_be_approved(ctx,monkeypatch):
+    m,c=ctx;simulated_agent(m,monkeypatch)
+    run=post(c,'workflows/operations',{'run_key':'stale-ai-test'}).json()['run_id']
+    review=post(c,'workflows/'+run+'/investigate').json()['id']
+    post(c,'clients',{'name':'Changed client','email':'test@example.com','service':'Accounting'})
+    assert post(c,'agent-reviews/'+review+'/decision',{'decision':'Approved','reviewer':'Accountant','note':'Reviewed before source changes.'}).status_code==409
+    assert post(c,'agent-reviews/'+review+'/decision',{'decision':'Rejected','reviewer':'Accountant','note':'Source records have changed.'}).status_code==200
+
+def test_ai_requires_model(ctx):
+    _,c=ctx
+    run=post(c,'workflows/operations',{'run_key':'no-ai-test'}).json()['run_id']
+    assert post(c,'workflows/'+run+'/investigate').status_code==503
+
+def test_cloud_configuration_and_shared_quota(ctx,monkeypatch,tmp_path):
+    m,c=ctx
+    monkeypatch.setenv('AI_PROVIDER','ollama-cloud')
+    monkeypatch.setenv('OLLAMA_MODEL','test-cloud')
+    monkeypatch.delenv('OLLAMA_API_KEY',raising=False)
+    assert not m.agent_configured()
+    monkeypatch.setenv('OLLAMA_API_KEY','test-secret')
+    monkeypatch.setattr(m,'PUBLIC_DEMO',True)
+    assert m.agent_configured()
+    monkeypatch.setenv('AI_DAILY_REVIEW_LIMIT','2')
+    monkeypatch.setenv('AI_VISITOR_DAILY_LIMIT','1')
+    m.reserve_cloud_review()
+    with pytest.raises(m.HTTPException) as err:m.reserve_cloud_review()
+    assert err.value.status_code==429
+    token=m.ACTIVE_DB.set(tmp_path/'other.sqlite3')
+    try:m.reserve_cloud_review()
+    finally:m.ACTIVE_DB.reset(token)
+    token=m.ACTIVE_DB.set(tmp_path/'third.sqlite3')
+    try:
+        with pytest.raises(m.HTTPException) as err:m.reserve_cloud_review()
+        assert err.value.status_code==429
+    finally:m.ACTIVE_DB.reset(token)
+
+def test_cloud_request_keeps_credentials_server_side(ctx,monkeypatch):
+    m,c=ctx
+    monkeypatch.setenv('AI_PROVIDER','ollama-cloud')
+    monkeypatch.setenv('OLLAMA_MODEL','test-cloud')
+    monkeypatch.setenv('OLLAMA_API_KEY','test-secret')
+    class Response:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def read(self,n):return json.dumps({'message':{'content':json.dumps({'action':'read','area':'invoices'})}}).encode()
+    def request(req,timeout):
+        assert req.full_url=='https://ollama.com/api/chat'
+        assert req.get_header('Authorization')=='Bearer test-secret'
+        payload=json.loads(req.data)
+        assert 'format' not in payload
+        assert 'test-secret' not in req.data.decode()
+        return Response()
+    monkeypatch.setattr(m.urllib.request,'urlopen',request)
+    assert m.agent_model([]).area=='invoices'
+    assert 'test-secret' not in c.get('/api/state').text

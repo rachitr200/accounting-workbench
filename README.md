@@ -332,9 +332,9 @@ Changing the hostname or setting `PUBLIC_DEMO=false` does not supply these capab
 npm --prefix frontend run build
 ```
 
-The current suite contains 24 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
+The current suite contains 30 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
 
-Live checks have confirmed frontend/API connectivity, saved sample records, separate visitor workspaces, and saved impact calculations. These checks do not establish compatibility with TMP’s CRM, production security, tax-answer accuracy, or performance at scale. Real model inference, live email delivery, bank connections, and payment integrations have not been validated.
+Live checks have confirmed frontend/API connectivity, saved sample records, separate visitor workspaces, and saved impact calculations. These checks do not establish compatibility with TMP’s CRM, production security, tax-answer accuracy, or performance at scale. Cloud inference, live email delivery, bank connections, and payment integrations have not been validated.
 
 ## Related projects
 
@@ -363,3 +363,29 @@ Import `integrations/n8n/tmp-operations.json` using n8n’s file-import option. 
 An n8n Cloud instance or a separate container cannot reach the host application through its own loopback address. Do not expose local mode to the internet to work around this. Shared or scheduled operation requires an authenticated service interface, persistent workspace, approved network configuration, failure handling and support ownership. The public Render demo uses visitor cookies and is not the target for this template.
 
 After those integration requirements are implemented, a schedule or approved incoming event can replace the manual trigger. The next AI stages are document extraction and email classification into validated proposals, followed by human review. They are not implemented by this template. No email, payment or accounting posting is performed.
+
+
+## Three-stage AI-assisted review
+
+1. **Automation:** Workflow centre runs deterministic checks, prepares reminder drafts and saves the exception snapshot.
+2. **Agent investigation:** On a private local installation with `OLLAMA_MODEL` configured, select **Investigate with AI**. The model chooses among read-only client, job, invoice and reconciliation tools. It has at most five model steps, sees bounded workspace records, and must reference evidence it inspected. There is no code execution, network-browsing tool or write tool.
+3. **Accountant decision:** Review the proposal and evidence, then approve or reject with a reviewer label and notes. Approval is refused when underlying accounting records have changed. Approval records a decision only; it does not send email, post entries or make payments. Actual actions still use the existing review screens and separately configured integrations.
+
+This is a bounded agent loop, not an autonomous accountant. Retrieved references are checked for membership, not semantic truth. Reviewer labels are not authenticated identities. Production use needs real roles, evidence evaluation and operational recovery. A failed model response is recorded as Failed and can be retried; a process crash can leave a Running record that requires operator recovery. Public deployments support an optional server-side Ollama Cloud connection for workflow investigation. Local model weights and runtime are installed separately and are not included in the repository.
+
+
+### Optional cloud AI for online visitors
+
+The workflow investigation can use Ollama Cloud without running a model on the web server. Set these **server environment variables** in Render:
+
+- `AI_PROVIDER=ollama-cloud`
+- `OLLAMA_MODEL`: a model name currently available from Ollama Cloud's `/api/tags` endpoint.
+- `OLLAMA_API_KEY`: your secret Ollama API key, entered directly in Render; never commit it or put it in frontend settings.
+- `AI_DAILY_REVIEW_LIMIT=20`: shared maximum investigation attempts per day.
+- `AI_VISITOR_DAILY_LIMIT=3`: maximum attempts per visitor workspace per day.
+
+Visitors do not need a provider account. Your provider account supplies the usage quota and any charges. Each investigation has at most five model calls, each with a bounded response. The AI only reads records and proposes actions; review never sends emails or payments. This cloud option applies to Workflow centre; the separate Knowledge desk generation remains local-only.
+
+Use synthetic data on the public prototype. Workflow records are sent to Ollama Cloud after the visitor starts an investigation. Cloud output is validated locally against a strict schema and evidence IDs; factual accuracy still needs human review. Failed attempts count against the allowance. A new browser session can bypass the visitor limit, but all sessions share the global limit. SQLite counters survive application restarts only with persistent storage; Render's ephemeral free storage can reset on redeployment. Configure provider-side quotas as well. For a production deployment, use durable quota storage and authenticated users.
+
+Cloud inference requires a configured account and has not yet been verified against a live provider. Automated tests use simulated provider responses.
