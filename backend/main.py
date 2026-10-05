@@ -527,6 +527,7 @@ def agent_model(messages):
         headers['Authorization']='Bearer '+os.environ['OLLAMA_API_KEY']
         # Cloud does not support schema-constrained format. Validate returned JSON locally.
         payload.pop('format',None)
+        payload.pop('think',None)
         payload['messages']=[{'role':'system','content':'Return only a JSON object matching this schema: '+json.dumps(AgentStep.model_json_schema())}]+messages
     req=urllib.request.Request(endpoint+'/api/chat',data=json.dumps(payload).encode(),headers=headers)
     with urllib.request.urlopen(req,timeout=30) as r:
@@ -577,11 +578,17 @@ def investigate(run_id:str):
             c.execute('UPDATE agent_reviews SET status=?,payload=? WHERE id=?',('Awaiting review',json.dumps(result),ident))
             audit(c,'AI investigation prepared',ident+'; awaiting human review; no external actions')
         return {'id':ident,'existing':False}
-    except Exception:
+    except Exception as exc:
+        if isinstance(exc,urllib.error.HTTPError):
+            reason={401:'Cloud API key was rejected.',403:'Cloud account does not have access to this model.',404:'Configured cloud model was not found.',429:'Cloud provider quota or rate limit reached.',400:'Cloud provider rejected the model request.'}.get(exc.code,'Cloud provider returned HTTP '+str(exc.code)+'.')
+        elif isinstance(exc,(TimeoutError,urllib.error.URLError)): reason='Model connection timed out or could not be reached.'
+        elif isinstance(exc,HTTPException): reason=str(exc.detail)
+        else: reason='Model response did not match the required JSON format.'
+        error=reason+' No actions executed.'
         with database(True) as c:
-            c.execute('UPDATE agent_reviews SET status=?,payload=? WHERE id=?',('Failed',json.dumps({'error':'Investigation failed or returned invalid evidence. Check the model connection and retry.','trace':trace}),ident))
+            c.execute('UPDATE agent_reviews SET status=?,payload=? WHERE id=?',('Failed',json.dumps({'error':error,'trace':trace}),ident))
             audit(c,'AI investigation failed',ident+'; no actions executed')
-        raise HTTPException(502,'AI investigation failed; no actions executed. Check the model connection and retry.')
+        raise HTTPException(502,error)
 
 class AgentDecision(Strict):
     decision:Literal['Approved','Rejected']
