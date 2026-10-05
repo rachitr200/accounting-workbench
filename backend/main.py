@@ -528,12 +528,15 @@ def agent_model(messages):
         # Cloud does not support schema-constrained format. Validate returned JSON locally.
         payload.pop('format',None)
         payload.pop('think',None)
-        payload['messages']=[{'role':'system','content':'Return only a JSON object matching this schema: '+json.dumps(AgentStep.model_json_schema())}]+messages
+        payload['messages']=[{'role':'system','content':messages[0]['content']+' Return ONLY one JSON object, no markdown or explanation. For a read use exactly {"action":"read","area":"invoices","summary":"","recommendations":[],"evidence_ids":[]}. For finish supply summary, string recommendations and evidence_ids. Schema: '+json.dumps(AgentStep.model_json_schema())}]+messages[1:]
     req=urllib.request.Request(endpoint+'/api/chat',data=json.dumps(payload).encode(),headers=headers)
     with urllib.request.urlopen(req,timeout=30) as r:
         raw=r.read(100001)
     if len(raw)>100000:raise ValueError('Model response too large')
-    return AgentStep.model_validate_json(json.loads(raw)['message']['content'])
+    content=json.loads(raw)['message']['content'].strip()
+    if content.startswith('```') and content.endswith('```'):
+        content=re.sub(r'^```(?:json)?\s*','',content)[:-3].strip()
+    return AgentStep.model_validate_json(content)
 
 @app.post('/api/workflows/{run_id}/investigate')
 def investigate(run_id:str):

@@ -319,5 +319,5 @@ def test_cloud_request_keeps_credentials_server_side(ctx,monkeypatch):
         assert 'test-secret' not in req.data.decode()
         return Response()
     monkeypatch.setattr(m.urllib.request,'urlopen',request)
-    assert m.agent_model([]).area=='invoices'
+    assert m.agent_model([{'role':'system','content':'Investigate.'}]).area=='invoices'
     assert 'test-secret' not in c.get('/api/state').text
