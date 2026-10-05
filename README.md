@@ -4,7 +4,7 @@ An accounting operations prototype developed by **Rachit Raj for TMP**. It bring
 
 The project prioritizes CRM workflows and operational reliability, followed by accounting automation and a private knowledge assistant. It provides a working foundation for evaluating these workflows before integrating them with TMP’s existing systems.
 
-**Current stage:** deployed standalone prototype with synthetic operational records, cloud AI investigation, semantic RAG, and a source-linked CRA/IRS starter library. It does not contain or complete TMP’s existing CRM, connect to live bank accounts, execute payments, or provide a trained tax model.
+**Current stage:** deployed standalone prototype with synthetic operational records, scheduled background operations, cloud AI investigation, semantic RAG, and a source-linked CRA/IRS starter library. It does not contain or complete TMP’s existing CRM, connect to live bank accounts, execute payments, or provide a trained tax model.
 
 [Live application](https://rachit-accounting-workbench.onrender.com) · [Source code](https://github.com/rachitr200/accounting-workbench) · [Health endpoint](https://rachit-accounting-workbench.onrender.com/api/health)
 
@@ -34,8 +34,9 @@ The latest release extends the operational workspace with connected workflow aut
 4. Select Canada or United States and 2026. General starter references use 2026 as a discovery label, not confirmation of year-specific legal applicability.
 5. Ask a question such as “Which accounting documents should businesses organize?” for Canada, or “How long should employment tax records be retained?” for the United States.
 6. Select cloud drafting when needed. Read the retrieved passage, official source link and citations; have an accountant review the answer.
+7. In **Workflow centre → Scheduled background checks**, enable **Run automatically**, choose a frequency and save. The first check becomes due immediately; later checks follow the selected interval while the server is awake. Refresh to see run history and status. Disable and save to stop future runs.
 
-**Release checks:** 41 automated tests passed and the frontend production build passed. Live checks confirmed cloud investigation, decision recording, semantic retrieval, country filtering, a cited cloud RAG answer, and starter-reference import. A local real-embedding check retrieved the correct CRA and IRS summaries for their respective questions. These checks establish application behavior and connectivity, not tax-advice accuracy or compatibility with TMP’s existing CRM.
+**Release checks:** 41 automated tests passed and the frontend production build passed. Live checks confirmed cloud investigation, decision recording, semantic retrieval, country filtering, a cited cloud RAG answer, starter-reference import, and automatic background draft preparation with next-run advancement. A local real-embedding check retrieved the correct CRA and IRS summaries for their respective questions. These checks establish application behavior and connectivity, not tax-advice accuracy or compatibility with TMP’s existing CRM.
 
 ### Remaining integration work
 
@@ -53,6 +54,7 @@ Review TMP’s actual CRM code and acceptance criteria first. Production adoptio
 
 | Module | Implemented functionality | Current boundary |
 | --- | --- | --- |
+| Workflow centre | Manual and scheduled operations checks, saved run snapshots, bounded AI investigation and accountant decision records | Schedules run only while the server is awake; approvals do not execute external actions |
 | Overview | Outstanding-document counts, transaction review queue, overdue receivables, and job capacity | Calculated from the workspace’s sample records |
 | Clients & leads | Create clients, track Lead → Onboarding → Active, manage document checklists | Tracks receipt status; does not upload, store, or inspect documents |
 | Jobs & time | Create budgeted jobs, record staff time by date, calculate remaining hours and overruns | No payroll, billing, or timesheet approval integration |
@@ -105,7 +107,7 @@ Money is stored as integer cents. Imports are transactional: identical repeated 
 3. Identify overdue receivables and prepare reminder drafts.
 4. Verify recipients and wording before marking drafts reviewed.
 
-The batch follow-up workflow prepares onboarding and overdue-invoice drafts without creating duplicates for the same item on the same day. It does not schedule or send messages automatically. Reconciliation approval does not automatically settle invoices.
+The batch follow-up workflow prepares onboarding and overdue-invoice drafts without creating duplicates for the same item on the same day. The optional background schedule can prepare these drafts automatically; it never sends messages. Sending remains a separate, explicitly configured operator action. Reconciliation approval does not automatically settle invoices.
 
 ### 5. Knowledge lookup and optional AI drafting
 
@@ -138,6 +140,8 @@ Include review and correction time in observations. Negative results are preserv
 flowchart TD
     Browser[React workspace] -->|Same-origin API requests| API[FastAPI application]
     API --> Validation[Pydantic validation and workflow rules]
+    Scheduler[Background interval scheduler] --> Validation
+    Scheduler --> ScheduleDB[Per-workspace due times and retry status]
     Validation --> DB[(SQLite workspace)]
     API --> Retrieval[Approved-source semantic retrieval]
     Retrieval --> VectorDB[Qdrant vectors + MiniLM embeddings]
@@ -167,7 +171,7 @@ Core financial checks are deterministic code. An LLM does not calculate balances
 
 ```text
 backend/
-  main.py                  API, database, validation, workflows, quota and model adapter
+  main.py                  API, database, scheduler, workflow rules, quota and AI adapter
   rag.py                   Chunking, embeddings, Qdrant indexes and semantic retrieval
   official_sources.json    Dated CRA/IRS reference summaries and original URLs
   send_reviewed.py         Operator-controlled SMTP sender
@@ -381,7 +385,7 @@ Changing the hostname or setting `PUBLIC_DEMO=false` does not supply these capab
 npm --prefix frontend run build
 ```
 
-The current suite contains 41 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
+The current suite contains 41 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, pilot measurement validation, and background scheduling with concurrent duplicate prevention, failure rollback/retry, catch-up, isolation and expiry. GitHub Actions runs the tests and frontend build.
 
 Live checks have confirmed frontend/API connectivity, saved sample records, separate visitor workspaces, and saved impact calculations. These checks do not establish compatibility with TMP’s CRM, production security, tax-answer accuracy, or performance at scale. A live Ollama Cloud workflow investigation and review-recording round trip was verified on October 5, 2026 using synthetic records. A live semantic RAG round trip was also verified on October 5, 2026: MiniLM embedded the approved sample onboarding procedure into Qdrant, a paraphrased question retrieved it, the country filter excluded it for a U.S. query, and Ollama Cloud returned a draft citing the retrieved passage. The Knowledge desk displayed the cited answer and similarity score. Live email delivery, bank connections, and payment integrations have not been validated.
 
@@ -469,6 +473,15 @@ Knowledge desk → **Add CRA / IRS references** imports two concise, source-link
 Example: select United States, 2026, and ask “What records support business income and expenses?” Answers still require accountant review. This starter library is not the Income Tax Act, a complete CRA/IRS corpus, or an automatically updated feed. Expansion needs reviewed source documents, effective dates, refresh ownership and a tax-expert evaluation set.
 
 ## Scheduled background operations
+
+### Enable or stop a schedule
+
+1. Open **Workflow centre**.
+2. Under **Scheduled background checks**, select **Run automatically**.
+3. Choose every 15 minutes, hour, 6 hours or 24 hours.
+4. Click **Save schedule**.
+5. Refresh after approximately 30 seconds while the server is awake to inspect the last run, next due time and history.
+6. To stop future checks, clear **Run automatically** and save again.
 
 **Workflow centre → Scheduled background checks** enables automatic draft preparation and accounting exception checks. Choose every 15 minutes, hour, 6 hours or 24 hours and save. Scheduling is off by default. Enabling or changing a schedule makes its first run due immediately; the server checks every 30 seconds. Refresh the page to see the last successful run, next due time, failures and run history. Disable and save to stop future runs.
 
