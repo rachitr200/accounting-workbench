@@ -334,7 +334,7 @@ npm --prefix frontend run build
 
 The current suite contains 30 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
 
-Live checks have confirmed frontend/API connectivity, saved sample records, separate visitor workspaces, and saved impact calculations. These checks do not establish compatibility with TMP’s CRM, production security, tax-answer accuracy, or performance at scale. Cloud inference, live email delivery, bank connections, and payment integrations have not been validated.
+Live checks have confirmed frontend/API connectivity, saved sample records, separate visitor workspaces, and saved impact calculations. These checks do not establish compatibility with TMP’s CRM, production security, tax-answer accuracy, or performance at scale. A live Ollama Cloud workflow investigation and review-recording round trip was verified on October 5, 2026 using synthetic records. Live email delivery, bank connections, and payment integrations have not been validated.
 
 ## Related projects
 
@@ -388,4 +388,4 @@ Visitors do not need a provider account. Your provider account supplies the usag
 
 Use synthetic data on the public prototype. Workflow records are sent to Ollama Cloud after the visitor starts an investigation. Cloud output is validated locally against a strict schema and evidence IDs; factual accuracy still needs human review. Failed attempts count against the allowance. A new browser session can bypass the visitor limit, but all sessions share the global limit. SQLite counters survive application restarts only with persistent storage; Render's ephemeral free storage can reset on redeployment. Configure provider-side quotas as well. For a production deployment, use durable quota storage and authenticated users.
 
-Cloud inference requires a configured account and has not yet been verified against a live provider. Automated tests use simulated provider responses.
+A live investigation using `gemma4:31b` on Ollama Cloud was verified on October 5, 2026: the agent read reconciliation and invoice evidence, saved a proposal, and recorded a test rejection with `executed=false`. Automated tests use simulated provider responses. This connectivity check does not establish accounting accuracy; matching amounts alone do not establish payment settlement or justify deleting an apparent duplicate.
