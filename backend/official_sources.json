@@ -1,0 +1,20 @@
+[
+  {
+    "id": "official-cra-records-v1",
+    "title": "CRA \u2014 Keeping records (reference summary, checked 2026-10-05)",
+    "jurisdiction": "CA",
+    "tax_year": 2026,
+    "source_url": "https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/keeping-records.html",
+    "approved": 1,
+    "body": "Reference summary checked 2026-10-05. This general guidance is indexed under 2026 for discovery, not a statement that it applies exclusively to the 2026 tax year. CRA describes records as organized accounting and financial documents. Relevant records depend on business type, paper or electronic storage, e-commerce activity, GST/HST registration, and employer status. The guidance links to business income and expense records, payroll and GST/HST records, electronic backups, retention requirements, and transaction audit trails. This overview does not specify retention periods or establish tax eligibility. Consult the linked official guidance and an accountant for the applicable facts."
+  },
+  {
+    "id": "official-irs-records-v1",
+    "title": "IRS \u2014 Recordkeeping (reference summary, checked 2026-10-05)",
+    "jurisdiction": "US",
+    "tax_year": 2026,
+    "source_url": "https://www.irs.gov/businesses/small-businesses-self-employed/recordkeeping",
+    "approved": 1,
+    "body": "Reference summary checked 2026-10-05. This general guidance is indexed under 2026 for discovery, not a statement that it applies exclusively to the 2026 tax year. IRS explains that business records support financial statements, income identification, expense tracking, property basis, tax-return preparation, and substantiation of return entries. A recordkeeping system should clearly show business income and expenses; appropriate documents depend on the business. Purchases, sales, and payroll produce supporting documents for the books. Retention depends on the event and how long records are needed to substantiate income or deductions. IRS states employment-tax records should be kept for at least four years. This overview does not determine deductibility or a universal retention period. Check the official page and accountant review for the specific situation."
+  }
+]

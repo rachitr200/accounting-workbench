@@ -397,3 +397,13 @@ def test_semantic_failure_does_not_silently_fake_search(ctx,monkeypatch):
     monkeypatch.setattr(m.rag,'retrieve',fail)
     assert semantic(c).status_code==503
     assert post(c,'knowledge/ask',{'question':'onboarding','jurisdiction':'CA','tax_year':2026,'retrieval':'keyword'}).json()['citations']
+
+def test_official_reference_import_is_idempotent_and_scoped(ctx):
+    _,c=ctx
+    assert post(c,'knowledge/official-sources').json()['added']==2
+    assert post(c,'knowledge/official-sources').json()['added']==0
+    sources=[x for x in state(c)['sources'] if x['id'].startswith('official-')]
+    assert {x['jurisdiction'] for x in sources}=={'CA','US'}
+    assert all('2026-10-05' in x['body'] and x['source_url'].startswith('https://') for x in sources)
+    answer=post(c,'knowledge/ask',{'question':'employment tax records four years','jurisdiction':'US','tax_year':2026}).json()
+    assert any(x['id']=='official-irs-records-v1' for x in answer['citations'])

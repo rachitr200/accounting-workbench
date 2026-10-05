@@ -334,6 +334,17 @@ def add_source(p:SourceIn):
     with database(True) as c:
         ident=uid();c.execute('INSERT INTO sources VALUES (?,?,?,?,?,?,?)',(ident,p.title,p.jurisdiction,p.tax_year,p.body,p.source_url,int(p.approved)));audit(c,'Knowledge source added',p.title)
     return {'id':ident}
+@app.post('/api/knowledge/official-sources')
+def import_official_sources():
+    references=json.loads((ROOT/'backend'/'official_sources.json').read_text())
+    added=0
+    with database(True) as c:
+        for source in references:
+            result=c.execute('INSERT OR IGNORE INTO sources VALUES (?,?,?,?,?,?,?)',tuple(source[k] for k in ('id','title','jurisdiction','tax_year','body','source_url','approved')))
+            added+=result.rowcount
+        audit(c,'Official reference summaries imported',f'{added} CRA/IRS references added; checked 2026-10-05; accountant review required')
+    return {'added':added,'checked_at':'2026-10-05','scope':'General recordkeeping reference summaries; not a complete tax corpus'}
+
 @app.post('/api/knowledge/index')
 def index_knowledge():
     with database() as c: sources=rows(c,'SELECT * FROM sources')

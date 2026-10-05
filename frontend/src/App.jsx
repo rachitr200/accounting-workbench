@@ -1021,6 +1021,7 @@ export default function App() {
                       Add source
                     </button>
                   </div>
+                  <button disabled={busy} onClick={() => act("knowledge/official-sources", {}, "CRA and IRS reference summaries added")}>Add CRA / IRS references</button>
                   <button disabled={busy} onClick={() => act("knowledge/index", {}, "Vector index updated")}>Build / update vector index</button>
                   {data.sources.map((s) => (
                     <div className="source" key={s.id}>
@@ -1048,7 +1049,7 @@ export default function App() {
                     </div>
                   ))}
                   <p className="muted">
-                    Approved sources are split into passages and stored in Qdrant with semantic embeddings. Search filters by country and tax year. Similarity and citations still need accountant review; authoritative tax sources must be supplied.
+                    Approved sources are split into passages and stored in Qdrant with semantic embeddings. Search filters by country and tax year. Similarity and citations still need accountant review; CRA / IRS reference summaries are available above. They were checked October 5, 2026 and indexed under 2026 for discovery; this is not a complete tax-law corpus or confirmation of year-specific applicability.
                   </p>
                 </section>
               </div>

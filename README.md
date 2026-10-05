@@ -334,7 +334,7 @@ Changing the hostname or setting `PUBLIC_DEMO=false` does not supply these capab
 npm --prefix frontend run build
 ```
 
-The current suite contains 36 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
+The current suite contains 37 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
 
 Live checks have confirmed frontend/API connectivity, saved sample records, separate visitor workspaces, and saved impact calculations. These checks do not establish compatibility with TMP’s CRM, production security, tax-answer accuracy, or performance at scale. A live Ollama Cloud workflow investigation and review-recording round trip was verified on October 5, 2026 using synthetic records. A live semantic RAG round trip was also verified on October 5, 2026: MiniLM embedded the approved sample onboarding procedure into Qdrant, a paraphrased question retrieved it, the country filter excluded it for a U.S. query, and Ollama Cloud returned a draft citing the retrieved passage. The Knowledge desk displayed the cited answer and similarity score. Live email delivery, bank connections, and payment integrations have not been validated.
 
@@ -411,3 +411,12 @@ Qdrant runs in embedded local mode, suitable for this small single-process proto
 The Docker build downloads the embedding model into `/app/models` and runtime loads it offline (`RAG_OFFLINE=true`). Local runs download model weights once into the FastEmbed cache; set `FASTEMBED_CACHE_PATH` to customize the cache directory. Python 3.10 or newer is required by the embedding dependencies; Python 3.12 is used in Docker and CI. The free Render instance uses ephemeral storage: sources and vectors may reset on deployment, and cold starts can delay loading. Production needs persistent storage and backups. Model/cache files and vector databases are excluded from GitHub.
 
 Tests cover real MiniLM semantic retrieval, Qdrant persistence, country/year and approval filters, source revision/revocation, separate visitor indexes, cloud-context construction and invalid-citation withholding. These checks establish pipeline behavior, not the correctness of Canadian or U.S. tax advice.
+
+## Official reference starter library
+
+Knowledge desk → **Add CRA / IRS references** imports two concise, source-linked recordkeeping summaries checked October 5, 2026. Importing again does not duplicate or overwrite existing sources. Then build the vector index or search normally. These general guidance summaries are indexed under 2026 for discovery; that label does not establish year-specific legal applicability. Approval means enabled for prototype retrieval, not review or endorsement by TMP or a tax professional.
+
+- CRA: https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/keeping-records.html
+- IRS: https://www.irs.gov/businesses/small-businesses-self-employed/recordkeeping
+
+Example: select United States, 2026, and ask “What records support business income and expenses?” Answers still require accountant review. This starter library is not the Income Tax Act, a complete CRA/IRS corpus, or an automatically updated feed. Expansion needs reviewed source documents, effective dates, refresh ownership and a tax-expert evaluation set.
