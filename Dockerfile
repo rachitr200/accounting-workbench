@@ -11,6 +11,9 @@ WORKDIR /app
 COPY backend/requirements-lock.txt /app/backend/requirements-lock.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements-lock.txt
 COPY backend/ /app/backend/
+ENV FASTEMBED_CACHE_PATH=/app/models
+RUN python -c "from backend.rag import embedding_model; embedding_model()"
+ENV RAG_OFFLINE=true
 COPY --from=frontend /build/dist /app/frontend/dist
 RUN useradd --create-home appuser && mkdir -p /app/data && chown -R appuser:appuser /app
 USER appuser

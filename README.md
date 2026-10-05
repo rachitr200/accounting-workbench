@@ -27,7 +27,7 @@ The project prioritizes CRM workflows and operational reliability, followed by a
 | Accounts payable | Record bills, detect possible duplicates by supplier and reference, approve or reject records | Approval does not initiate payment |
 | Accounts receivable | Track open invoices, identify overdue items, prepare reminders | No live settlement, partial-payment allocation, or credit-note handling |
 | Reminder drafts | Individual and batch draft creation, same-day duplicate prevention, explicit review | Browser actions never send email |
-| Knowledge desk | Register source text, filter by jurisdiction/year, retrieve relevant excerpts, optional local-model drafting | Public deployment provides source lookup only; no authoritative tax corpus is bundled |
+| Knowledge desk | Semantic search with MiniLM embeddings, Qdrant vector storage, country/year filtering, and cited local or cloud RAG drafts | Sources are synthetic or user-supplied; no authoritative tax corpus is bundled |
 | Activity & export | Record workflow changes and export a JSON snapshot | Not an immutable audit system or a backup/restore service |
 | Rollout & impact | Save acceptance-check evidence and before/after timing observations | Verification and measurements are entered by users, not independently certified |
 | Staff playbook | Step-by-step procedures, failure recovery, reusable prompts, and integration handover guidance | Procedures must be adapted and approved for TMP’s actual processes |
@@ -78,13 +78,14 @@ The batch follow-up workflow prepares onboarding and overdue-invoice drafts with
 
 1. Add approved source text with its title, jurisdiction, year, and optional source URL.
 2. Ask a question for a selected jurisdiction and year.
-3. The backend retrieves eligible excerpts using keyword matching.
-4. With no configured model, the application displays source-based lookup results.
-5. In local mode, an optional Ollama-compatible model can draft an answer from the retrieved excerpts.
+3. Approved source text is split into overlapping passages, embedded with MiniLM, and stored in an embedded Qdrant vector database per workspace.
+4. Semantic search retrieves the four closest eligible passages above the similarity threshold. Country and year filters apply before retrieval; keyword search remains an explicit alternative.
+5. Without AI generation selected, the application displays passages with their references and similarity scores.
+6. The configured local or Ollama Cloud model can draft an answer grounded in those passages, with citation checks and accountant review.
 
 The application abstains when no eligible source matches. Model-generated drafts must contain valid retrieved-source identifiers; invalid citation identifiers cause the draft to be withheld. This check does not prove factual accuracy or that a cited source supports every claim.
 
-The bundled source is a fictional onboarding procedure. A production tax assistant needs a maintained Canadian/U.S. source collection, effective-date handling, stronger retrieval, and expert evaluation. No model weights or embeddings service are included, and no cloud-model fallback is used.
+The bundled source is a fictional onboarding procedure. A production tax assistant needs a maintained Canadian/U.S. source collection, effective-date handling, stronger retrieval, and expert evaluation. The Docker image includes a CPU embedding model; no tax-trained model or tax-law corpus is bundled. Cloud generation is an explicit configured connection, not a silent fallback.
 
 ### 6. Rollout and impact tracking
 
@@ -105,7 +106,8 @@ flowchart TD
     Browser[React workspace] -->|Same-origin API requests| API[FastAPI application]
     API --> Validation[Pydantic validation and workflow rules]
     Validation --> DB[(SQLite workspace)]
-    API --> Retrieval[Approved-source keyword lookup]
+    API --> Retrieval[Approved-source semantic retrieval]
+    Retrieval --> VectorDB[Qdrant vectors + MiniLM embeddings]
     Retrieval -. Optional local mode .-> Model[Loopback Ollama-compatible server]
     Operator[Operator-controlled command] -. Separately configured .-> SMTP[Reviewed email adapter]
 ```
@@ -211,7 +213,7 @@ export OLLAMA_MODEL='your-installed-model-name'
 .venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
 ```
 
-Choose **Use configured local model** in Knowledge desk. Public-demo mode disables generation even when a model name is configured. In a Docker container, loopback refers to that container; the existing adapter will not connect to a separate model container or remote host without implementation changes. Model selection, licence review, hardware sizing, and live-model evaluation are still required.
+Choose **Draft an answer with AI using retrieved sources** in Knowledge desk. Public-demo mode enables generation only with the configured Ollama Cloud adapter. Local generation remains available for local deployments. In a Docker container, loopback refers to that container; the existing adapter will not connect to a separate model container or remote host without implementation changes. Model selection, licence review, hardware sizing, and live-model evaluation are still required.
 
 ### Optional reviewed email delivery
 
@@ -332,7 +334,7 @@ Changing the hostname or setting `PUBLIC_DEMO=false` does not supply these capab
 npm --prefix frontend run build
 ```
 
-The current suite contains 30 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
+The current suite contains 36 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
 
 Live checks have confirmed frontend/API connectivity, saved sample records, separate visitor workspaces, and saved impact calculations. These checks do not establish compatibility with TMP’s CRM, production security, tax-answer accuracy, or performance at scale. A live Ollama Cloud workflow investigation and review-recording round trip was verified on October 5, 2026 using synthetic records. Live email delivery, bank connections, and payment integrations have not been validated.
 
@@ -384,8 +386,28 @@ The workflow investigation can use Ollama Cloud without running a model on the w
 - `AI_DAILY_REVIEW_LIMIT=20`: shared maximum investigation attempts per day.
 - `AI_VISITOR_DAILY_LIMIT=3`: maximum attempts per visitor workspace per day.
 
-Visitors do not need a provider account. Your provider account supplies the usage quota and any charges. Each investigation has at most five model calls, each with a bounded response. The AI only reads records and proposes actions; review never sends emails or payments. This cloud option applies to Workflow centre; the separate Knowledge desk generation remains local-only.
+Visitors do not need a provider account. Your provider account supplies the usage quota and any charges. Each investigation has at most five model calls, each with a bounded response. The AI only reads records and proposes actions; review never sends emails or payments. This cloud option applies to Workflow centre and Knowledge desk. RAG drafts share the same global and visitor daily allowance as investigations; semantic search without generation does not consume cloud-model quota.
 
 Use synthetic data on the public prototype. Workflow records are sent to Ollama Cloud after the visitor starts an investigation. Cloud output is validated locally against a strict schema and evidence IDs; factual accuracy still needs human review. Failed attempts count against the allowance. A new browser session can bypass the visitor limit, but all sessions share the global limit. SQLite counters survive application restarts only with persistent storage; Render's ephemeral free storage can reset on redeployment. Configure provider-side quotas as well. For a production deployment, use durable quota storage and authenticated users.
 
 A live investigation using `gemma4:31b` on Ollama Cloud was verified on October 5, 2026: the agent read reconciliation and invoice evidence, saved a proposal, and recorded a test rejection with `executed=false`. Automated tests use simulated provider responses. This connectivity check does not establish accounting accuracy; matching amounts alone do not establish payment settlement or justify deleting an apparent duplicate.
+
+
+## Semantic retrieval and RAG
+
+**Flow:** approved text → 850-character passages with 120-character overlap → MiniLM 384-dimensional embeddings → Qdrant cosine search → country/year filtering → up to four passages → model answer with references → accountant review.
+
+- Knowledge desk defaults to semantic search. A synonym question such as “What paperwork should a new customer supply?” retrieves the sample onboarding document without requiring exact keyword overlap.
+- **Build / update vector index** explicitly synchronizes the library. Searches also synchronize automatically after changes. Content fingerprints include all source fields; editing or revoking a source invalidates the index revision. Retrieval rechecks returned points against the SQLite source records.
+- Each signed visitor workspace has its own disk-backed Qdrant directory alongside its SQLite database. No shared collection mixes visitors. Index directories are removed when expired demo workspaces are cleaned up.
+- Embeddings run on the app server using `sentence-transformers/all-MiniLM-L6-v2` via FastEmbed/ONNX, with one CPU thread. Document text is not sent to an external embedding service. Cloud generation sends the question and retrieved passages to the configured Ollama account.
+- Results expose source and passage IDs, excerpts, offsets, country, tax year and cosine similarity. A score measures semantic similarity, not truth or tax correctness. A configurable retrieval pipeline is not equivalent to a tax-trained LLM.
+- Source ingestion currently accepts pasted text through the source library; automatic PDF parsing, OCR, website crawling and maintained CRA/IRS ingestion are future work.
+
+The prototype limits each workspace to 40 approved sources and 1,200 passages, retrieving at most four above a 0.35 cosine score. This is an initial threshold, not a validated tax-domain acceptance threshold. Review source coverage and evaluate it with TMP accountants before production use. Citation validation checks identifier membership; it does not prove that every claim is supported. Unsupported queries can still retrieve a superficially similar passage, so inspect evidence and abstention behavior.
+
+Qdrant runs in embedded local mode, suitable for this small single-process prototype. The app serializes vector operations to avoid simultaneous writers. Use one web worker. Large collections and multiple application replicas require Qdrant server/cloud plus enforced tenant filters, authenticated roles, durable ingestion jobs and a migration plan; those are not configured here.
+
+The Docker build downloads the embedding model into `/app/models` and runtime loads it offline (`RAG_OFFLINE=true`). Local runs download model weights once into the FastEmbed cache; set `FASTEMBED_CACHE_PATH` to customize the cache directory. Python 3.10 or newer is required by the embedding dependencies; Python 3.12 is used in Docker and CI. The free Render instance uses ephemeral storage: sources and vectors may reset on deployment, and cold starts can delay loading. Production needs persistent storage and backups. Model/cache files and vector databases are excluded from GitHub.
+
+Tests cover real MiniLM semantic retrieval, Qdrant persistence, country/year and approval filters, source revision/revocation, separate visitor indexes, cloud-context construction and invalid-citation withholding. These checks establish pipeline behavior, not the correctness of Canadian or U.S. tax advice.

@@ -902,8 +902,8 @@ export default function App() {
                 <div>
                   <strong>
                     {data.knowledge_model_configured
-                      ? "Local model configured — availability checked when used"
-                      : "Source lookup available · local AI model not connected"}
+                      ? "AI connected · semantic source search available"
+                      : "Semantic source search available · AI model not connected"}
                   </strong>
                   <p>
                     The included procedure is synthetic, not tax law. Add
@@ -933,6 +933,7 @@ export default function App() {
                             jurisdiction: f.jurisdiction,
                             tax_year: Number(f.tax_year),
                             use_model: f.use_model === "on",
+                            retrieval: f.retrieval,
                           }),
                         );
                       } catch (e) {
@@ -960,6 +961,9 @@ export default function App() {
                         />
                       </Field>
                     </div>
+                    <Field label="Search method">
+                      <select name="retrieval"><option value="semantic">Semantic search — meaning and context</option><option value="keyword">Keyword search — exact terms</option></select>
+                    </Field>
                     <Field label="Question">
                       <textarea
                         name="question"
@@ -976,7 +980,7 @@ export default function App() {
                         name="use_model"
                         disabled={!data.knowledge_model_configured}
                       />
-                      Use configured local model to draft an answer
+                      {data.public_demo ? "Draft with cloud AI — sends your question and retrieved passages" : "Draft an answer with AI using retrieved sources"}
                     </label>
                     <button className="primary" disabled={asking}>
                       {asking
@@ -989,11 +993,12 @@ export default function App() {
                       <h3>{answer.mode}</h3>
                       <p className="preserve">{answer.answer}</p>
                       {answer.citations.map((s) => (
-                        <div className="citation" key={s.id}>
+                        <div className="citation" key={s.chunk_id || s.id}>
                           <b>
-                            [{s.id}] {s.title}
+                            [{s.chunk_id || s.id}] {s.title}
                           </b>
                           <p>{s.excerpt}</p>
+                          {s.score != null && <small>Semantic similarity: {s.score.toFixed(3)} · {s.jurisdiction} · {s.tax_year}</small>}
                           {s.source_url && (
                             <a
                               href={s.source_url}
@@ -1016,6 +1021,7 @@ export default function App() {
                       Add source
                     </button>
                   </div>
+                  <button disabled={busy} onClick={() => act("knowledge/index", {}, "Vector index updated")}>Build / update vector index</button>
                   {data.sources.map((s) => (
                     <div className="source" key={s.id}>
                       <button
@@ -1042,10 +1048,7 @@ export default function App() {
                     </div>
                   ))}
                   <p className="muted">
-                    This prototype uses keyword retrieval. Production work needs
-                    authoritative source ingestion, version control,
-                    permissions, better retrieval and a tax-expert evaluation
-                    set.
+                    Approved sources are split into passages and stored in Qdrant with semantic embeddings. Search filters by country and tax year. Similarity and citations still need accountant review; authoritative tax sources must be supplied.
                   </p>
                 </section>
               </div>

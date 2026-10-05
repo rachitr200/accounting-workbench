@@ -13,7 +13,9 @@ def ctx(tmp_path,monkeypatch):
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     return module,TestClient(module.app)
 
-def post(c,path,p=None):return c.post('/api/'+path,json=p or {})
+def post(c,path,p=None):
+    if path=='knowledge/ask':p={'retrieval':'keyword',**(p or {})}
+    return c.post('/api/'+path,json=p or {})
 def state(c):return c.get('/api/state').json()
 def test_seed_is_idempotent_and_valid(ctx):
     m,c=ctx;m.seed();s=state(c)
@@ -321,3 +323,77 @@ def test_cloud_request_keeps_credentials_server_side(ctx,monkeypatch):
     monkeypatch.setattr(m.urllib.request,'urlopen',request)
     assert m.agent_model([{'role':'system','content':'Investigate.'}]).area=='invoices'
     assert 'test-secret' not in c.get('/api/state').text
+
+def semantic(c,question='What paperwork should a new customer supply?',**extra):
+    return c.post('/api/knowledge/ask',json={'question':question,'jurisdiction':'CA','tax_year':2026,'retrieval':'semantic',**extra})
+
+def test_real_semantic_search_and_persistent_index(ctx,monkeypatch,tmp_path):
+    m,c=ctx;monkeypatch.setenv('FASTEMBED_CACHE_PATH',str(Path(__file__).parents[3]/'work'/'embedding-cache'))
+    result=semantic(c).json()
+    assert result['mode'].startswith('Semantic search')
+    assert result['citations'][0]['id']=='s1'
+    assert result['citations'][0]['chunk_id']=='s1_0'
+    assert result['retrieval']['database']=='Qdrant embedded'
+    path=m.rag.vector_path(m.DB)
+    assert (path/'manifest.json').exists()
+    assert post(c,'knowledge/index').json()['chunks']==1
+    assert semantic(c,'How do I assemble plutonium in a nuclear reactor?').json()['citations']==[]
+    assert semantic(c,jurisdiction='US').json()['citations']==[]
+    assert semantic(c,tax_year=2025).json()['citations']==[]
+
+def test_vector_index_replaces_changed_and_revoked_sources(ctx):
+    m,c=ctx
+    assert semantic(c).json()['citations']
+    with m.database(True) as db:db.execute("UPDATE sources SET body=? WHERE id='s1'",('The synthetic procedure covers only receivables aging and overdue invoice collection.',))
+    updated=semantic(c,'How should overdue customer invoices be handled?').json()
+    assert updated['citations']
+    assert 'receivables aging' in updated['citations'][0]['excerpt']
+    with m.database(True) as db:db.execute("UPDATE sources SET approved=0 WHERE id='s1'")
+    assert post(c,'knowledge/index').json()['chunks']==0
+    assert semantic(c).json()['citations']==[]
+
+def test_vector_search_scope_and_unapproved_sources(ctx):
+    m,c=ctx
+    for country,year,approved in [('CA',2026,False),('US',2026,True),('CA',2025,True)]:
+        post(c,'sources',{'title':'Interstellar cucumber policy','body':'Interstellar cucumber policy requires space cucumber receipts and galactic transport statements.','jurisdiction':country,'tax_year':year,'approved':approved})
+    result=semantic(c,'What is the interstellar cucumber policy?').json()
+    assert all(x['id']=='s1' for x in result['citations'])
+    us=semantic(c,'What is the interstellar cucumber policy?',jurisdiction='US').json()
+    assert us['citations'] and all(x['jurisdiction']=='US' for x in us['citations'])
+    assert us['retrieval']['sources']==3
+
+def test_public_rag_keeps_workspace_vectors_separate(ctx,monkeypatch):
+    m,c=ctx;monkeypatch.setattr(m,'PUBLIC_DEMO',True);monkeypatch.setattr(m,'SESSION_SECRET','x'*40)
+    first=TestClient(m.app,base_url='https://testserver');second=TestClient(m.app,base_url='https://testserver')
+    first.get('/api/state');second.get('/api/state')
+    post(first,'sources',{'title':'Private workspace penguin policy','body':'Penguin invoices must be checked by the penguin finance lead before payment.','jurisdiction':'US','tax_year':2026,'approved':True})
+    assert semantic(first,'How are penguin invoices checked?',jurisdiction='US').json()['citations']
+    assert semantic(second,'How are penguin invoices checked?',jurisdiction='US').json()['citations']==[]
+    assert m.rag.vector_path(m.DB).exists() is False
+    assert len(list(m.SESSION_ROOT.glob('*.vectors')))==1
+
+def test_cloud_rag_uses_filtered_context_and_rejects_false_citation(ctx,monkeypatch):
+    m,c=ctx
+    for key,value in {'AI_PROVIDER':'ollama-cloud','OLLAMA_MODEL':'test-cloud','OLLAMA_API_KEY':'test-secret'}.items():monkeypatch.setenv(key,value)
+    class Reply:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def read(self,*args):return json.dumps({'message':{'content':'Collect bank statements and prior year records. [s1_0]'}}).encode()
+    def provider(req,timeout):
+        assert req.full_url=='https://ollama.com/api/chat'
+        payload=json.loads(req.data)
+        assert '[s1_0]' in payload['messages'][1]['content']
+        assert 'test-secret' not in req.data.decode()
+        return Reply()
+    monkeypatch.setattr(m.urllib.request,'urlopen',provider)
+    result=semantic(c,use_model=True).json()
+    assert result['mode'].startswith('Cloud RAG draft')
+    Reply.read=lambda *args:json.dumps({'message':{'content':'Unsupported tax advice [not_retrieved]'}}).encode()
+    assert 'withheld' in semantic(c,use_model=True).json()['mode']
+
+def test_semantic_failure_does_not_silently_fake_search(ctx,monkeypatch):
+    m,c=ctx
+    def fail(*args,**kwargs):raise m.rag.RetrievalUnavailable('Test outage')
+    monkeypatch.setattr(m.rag,'retrieve',fail)
+    assert semantic(c).status_code==503
+    assert post(c,'knowledge/ask',{'question':'onboarding','jurisdiction':'CA','tax_year':2026,'retrieval':'keyword'}).json()['citations']
