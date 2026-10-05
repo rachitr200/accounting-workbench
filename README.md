@@ -4,9 +4,41 @@ An accounting operations prototype developed by **Rachit Raj for TMP**. It bring
 
 The project prioritizes CRM workflows and operational reliability, followed by accounting automation and a private knowledge assistant. It provides a working foundation for evaluating these workflows before integrating them with TMP’s existing systems.
 
-**Current stage:** deployed standalone prototype with synthetic data. It does not contain or complete TMP’s existing CRM, connect to live bank accounts, execute payments, or provide a trained tax model.
+**Current stage:** deployed standalone prototype with synthetic operational records, cloud AI investigation, semantic RAG, and a source-linked CRA/IRS starter library. It does not contain or complete TMP’s existing CRM, connect to live bank accounts, execute payments, or provide a trained tax model.
 
 [Live application](https://rachit-accounting-workbench.onrender.com) · [Source code](https://github.com/rachitr200/accounting-workbench) · [Health endpoint](https://rachit-accounting-workbench.onrender.com/api/health)
+
+## Latest development update — October 5, 2026
+
+The latest release extends the operational workspace with connected workflow automation, bounded AI investigation, online cloud generation and semantic knowledge retrieval. CRM completion remains the first integration priority for TMP; the new AI capabilities support review and knowledge access around those workflows.
+
+| Addition | How it works | Verification and boundary |
+| --- | --- | --- |
+| Connected operations workflow | Runs onboarding follow-ups, overdue receivable drafts, budget checks, duplicate-payable checks and reconciliation exceptions in one transaction; stores a run snapshot | Run-key retries return the saved result; no external messages, payments or ledger postings |
+| n8n integration template | Importable manual HTTP workflow for a local evaluation installation | Template supplied; a live n8n connection has not been exercised |
+| Bounded agent investigation | AI chooses read-only tools for clients, jobs, invoices and reconciliation; produces a structured proposal with inspected evidence | At most five model steps; validated output; no arbitrary code or write tools |
+| Accountant decisions | Approve or reject the proposal with notes; a digest prevents approving stale accounting evidence | Decisions are recorded only; reviewer labels are not authenticated staff identities |
+| Online cloud AI | Server-side Ollama Cloud connection serves visitors without requiring their own provider account | A live investigation and review round trip was verified with `gemma4:31b`; API key remains server-side |
+| Usage controls | Shared daily allowance and per-visitor daily allowance apply to cloud investigations and RAG drafting | Current configured limits: 100 globally and 100 per visitor daily; these count attempts, not individual model calls |
+| Semantic retrieval | MiniLM creates 384-dimensional embeddings; Qdrant stores workspace-specific passage vectors and searches by meaning | Real embedding retrieval, persistence, source changes, approval, country/year filters and visitor separation tested |
+| Cited RAG answers | Retrieve approved passages, optionally ask cloud AI to draft from that context, and validate citation IDs | Live paraphrased onboarding question returned a source-cited answer; citation membership is not factual verification |
+| CRA/IRS starter references | One-click import of two dated, source-linked recordkeeping summaries | Live import confirmed; repeated import is idempotent; general guidance rather than a complete or automatically maintained tax corpus |
+| Deployment and packaging | Combined Docker service serves frontend and backend on the same origin; embedding weights downloaded during build and loaded offline | Deployed on Render; source, compiled frontend and dependency lock updated on GitHub |
+
+### Try the updated workflows
+
+1. Open [the live application](https://rachit-accounting-workbench.onrender.com) and use fictional records only.
+2. In **Workflow centre**, run the operations workflow, then choose **Investigate with AI** to inspect a bounded proposal. Review its evidence before recording a decision.
+3. In **Knowledge desk**, click **Add CRA / IRS references**. Click **Build / update vector index**, or let the next semantic search synchronize it automatically.
+4. Select Canada or United States and 2026. General starter references use 2026 as a discovery label, not confirmation of year-specific legal applicability.
+5. Ask a question such as “Which accounting documents should businesses organize?” for Canada, or “How long should employment tax records be retained?” for the United States.
+6. Select cloud drafting when needed. Read the retrieved passage, official source link and citations; have an accountant review the answer.
+
+**Release checks:** 37 automated tests passed and the frontend production build passed. Live checks confirmed cloud investigation, decision recording, semantic retrieval, country filtering, a cited cloud RAG answer, and starter-reference import. A local real-embedding check retrieved the correct CRA and IRS summaries for their respective questions. These checks establish application behavior and connectivity, not tax-advice accuracy or compatibility with TMP’s existing CRM.
+
+### Remaining integration work
+
+Review TMP’s actual CRM code and acceptance criteria first. Production adoption also needs authenticated roles, durable storage and backups, approved email/accounting connections, monitored background jobs, effective-date-aware tax sources, expert evaluations and staff training. The free Render service can reset sources, vector indexes and quota counters after redeployment; the current public prototype is intended for synthetic evaluation.
 
 ## Project objectives
 
@@ -27,7 +59,7 @@ The project prioritizes CRM workflows and operational reliability, followed by a
 | Accounts payable | Record bills, detect possible duplicates by supplier and reference, approve or reject records | Approval does not initiate payment |
 | Accounts receivable | Track open invoices, identify overdue items, prepare reminders | No live settlement, partial-payment allocation, or credit-note handling |
 | Reminder drafts | Individual and batch draft creation, same-day duplicate prevention, explicit review | Browser actions never send email |
-| Knowledge desk | Semantic search with MiniLM embeddings, Qdrant vector storage, country/year filtering, and cited local or cloud RAG drafts | Sources are synthetic or user-supplied; no authoritative tax corpus is bundled |
+| Knowledge desk | Semantic search with MiniLM embeddings, Qdrant vector storage, country/year filtering, and cited local or cloud RAG drafts | Synthetic procedure, pasted sources and optional official CRA/IRS reference summaries; no complete tax-law corpus |
 | Activity & export | Record workflow changes and export a JSON snapshot | Not an immutable audit system or a backup/restore service |
 | Rollout & impact | Save acceptance-check evidence and before/after timing observations | Verification and measurements are entered by users, not independently certified |
 | Staff playbook | Step-by-step procedures, failure recovery, reusable prompts, and integration handover guidance | Procedures must be adapted and approved for TMP’s actual processes |
@@ -85,7 +117,7 @@ The batch follow-up workflow prepares onboarding and overdue-invoice drafts with
 
 The application abstains when no eligible source matches. Model-generated drafts must contain valid retrieved-source identifiers; invalid citation identifiers cause the draft to be withheld. This check does not prove factual accuracy or that a cited source supports every claim.
 
-The bundled source is a fictional onboarding procedure. A production tax assistant needs a maintained Canadian/U.S. source collection, effective-date handling, stronger retrieval, and expert evaluation. The Docker image includes a CPU embedding model; no tax-trained model or tax-law corpus is bundled. Cloud generation is an explicit configured connection, not a silent fallback.
+The default source is a fictional onboarding procedure. The optional starter import adds two dated summaries of official CRA/IRS recordkeeping guidance with original links. A production tax assistant needs a maintained Canadian/U.S. source collection, effective-date handling, stronger retrieval, and expert evaluation. The Docker image includes a CPU embedding model; no tax-trained model or tax-law corpus is bundled. Cloud generation is an explicit configured connection, not a silent fallback.
 
 ### 6. Rollout and impact tracking
 
@@ -109,6 +141,10 @@ flowchart TD
     API --> Retrieval[Approved-source semantic retrieval]
     Retrieval --> VectorDB[Qdrant vectors + MiniLM embeddings]
     Retrieval -. Optional local mode .-> Model[Loopback Ollama-compatible server]
+    Retrieval -. Optional cloud draft .-> Cloud[Ollama Cloud]
+    API --> Agent[Bounded read-only agent investigation]
+    Agent -. Configured provider .-> Cloud
+    Agent --> Review[Accountant decision record]
     Operator[Operator-controlled command] -. Separately configured .-> SMTP[Reviewed email adapter]
 ```
 
@@ -118,18 +154,21 @@ flowchart TD
 | API | FastAPI routes for workspace operations |
 | Validation | Pydantic schemas plus workflow checks |
 | Storage | SQLite for clients, jobs, time, invoices, matches, drafts, sources, activity, and rollout records |
-| AI adapter | Optional loopback connection to an installed Ollama-compatible model |
+| AI adapter | Configured local Ollama or server-side Ollama Cloud; bounded investigation and cited RAG drafts |
+| Vector retrieval | FastEmbed/ONNX MiniLM embeddings and disk-backed embedded Qdrant per workspace |
 | Packaging | Multi-stage Docker build using Node 22 and Python 3.12 |
 | Hosting | Render web service serving both frontend assets and API |
 | Checks | Pytest workflow tests and a frontend build through GitHub Actions |
 
-Core financial checks are deterministic code. An LLM does not calculate balances, approve matches, initiate payments, or modify records. Generative AI is optional and limited to drafting knowledge answers.
+Core financial checks are deterministic code. An LLM does not calculate balances, approve matches, initiate payments, or modify records. Generative AI optionally drafts knowledge answers and investigates workflow evidence through bounded read-only tools. AI proposals do not execute external actions.
 
 ## Repository structure
 
 ```text
 backend/
-  main.py                  API, database, validation, and model adapter
+  main.py                  API, database, validation, workflows, quota and model adapter
+  rag.py                   Chunking, embeddings, Qdrant indexes and semantic retrieval
+  official_sources.json    Dated CRA/IRS reference summaries and original URLs
   send_reviewed.py         Operator-controlled SMTP sender
   requirements-lock.txt    Pinned Python dependencies
   .env.example             Configuration reference; not loaded automatically
@@ -138,6 +177,7 @@ frontend/
   src/Enablement.jsx       Rollout, impact tracking, and staff playbook
   src/style.css            Application styling
   dist/                    Compiled frontend
+integrations/n8n/          Manual local operations workflow template
 examples/                  Synthetic bank and ledger CSVs
 tests/                     Workflow and public-session tests
 .github/workflows/         Automated checks
@@ -196,7 +236,13 @@ Export settings into the process environment or configure them through the hosti
 | `WORKBENCH_DB` | SQLite path; defaults to `data/workbench.sqlite3` |
 | `WORKBENCH_ALLOWED_HOSTS` | Additional permitted hostnames, comma-separated; not an authentication control |
 | `PORT` | Container listening port; defaults to `10000` |
-| `OLLAMA_MODEL` | Exact name of an already-installed local model |
+| `AI_PROVIDER` | Set `ollama-cloud` for online generation; otherwise use the supported local configuration |
+| `OLLAMA_API_KEY` | Secret server-side Ollama Cloud key; never expose in frontend or GitHub |
+| `AI_DAILY_REVIEW_LIMIT` | Shared daily cloud-attempt cap; code default 20, current Render configuration 100 |
+| `AI_VISITOR_DAILY_LIMIT` | Per-visitor daily cloud-attempt cap; code default 3, current Render configuration 100 |
+| `FASTEMBED_CACHE_PATH` | Local embedding cache directory; Docker uses `/app/models` |
+| `RAG_OFFLINE` | Set `true` to load cached embedding weights without downloading at runtime |
+| `OLLAMA_MODEL` | Exact installed local model name or available Ollama Cloud model name |
 | `OLLAMA_URL` | Supported values: `http://127.0.0.1:11434` or `http://localhost:11434` |
 | `SMTP_ENABLED` | Explicitly set `true` only when configuring authorized operator-controlled sending |
 | `SMTP_HOST`, `SMTP_PORT` | Mail server and TLS port, 465 or 587 |
@@ -370,7 +416,7 @@ After those integration requirements are implemented, a schedule or approved inc
 ## Three-stage AI-assisted review
 
 1. **Automation:** Workflow centre runs deterministic checks, prepares reminder drafts and saves the exception snapshot.
-2. **Agent investigation:** On a private local installation with `OLLAMA_MODEL` configured, select **Investigate with AI**. The model chooses among read-only client, job, invoice and reconciliation tools. It has at most five model steps, sees bounded workspace records, and must reference evidence it inspected. There is no code execution, network-browsing tool or write tool.
+2. **Agent investigation:** With a configured local model or server-side Ollama Cloud connection, select **Investigate with AI**. The model chooses among read-only client, job, invoice and reconciliation tools. It has at most five model steps, sees bounded workspace records, and must reference evidence it inspected. There is no code execution, network-browsing tool or write tool.
 3. **Accountant decision:** Review the proposal and evidence, then approve or reject with a reviewer label and notes. Approval is refused when underlying accounting records have changed. Approval records a decision only; it does not send email, post entries or make payments. Actual actions still use the existing review screens and separately configured integrations.
 
 This is a bounded agent loop, not an autonomous accountant. Retrieved references are checked for membership, not semantic truth. Reviewer labels are not authenticated identities. Production use needs real roles, evidence evaluation and operational recovery. A failed model response is recorded as Failed and can be retried; a process crash can leave a Running record that requires operator recovery. Public deployments support an optional server-side Ollama Cloud connection for workflow investigation. Local model weights and runtime are installed separately and are not included in the repository.
@@ -383,8 +429,8 @@ The workflow investigation can use Ollama Cloud without running a model on the w
 - `AI_PROVIDER=ollama-cloud`
 - `OLLAMA_MODEL`: a model name currently available from Ollama Cloud's `/api/tags` endpoint.
 - `OLLAMA_API_KEY`: your secret Ollama API key, entered directly in Render; never commit it or put it in frontend settings.
-- `AI_DAILY_REVIEW_LIMIT=20`: shared maximum investigation attempts per day.
-- `AI_VISITOR_DAILY_LIMIT=3`: maximum attempts per visitor workspace per day.
+- `AI_DAILY_REVIEW_LIMIT=100`: current deployed shared maximum cloud AI attempts per day (code default: 20).
+- `AI_VISITOR_DAILY_LIMIT=100`: current deployed maximum cloud AI attempts per visitor workspace per day (code default: 3).
 
 Visitors do not need a provider account. Your provider account supplies the usage quota and any charges. Each investigation has at most five model calls, each with a bounded response. The AI only reads records and proposes actions; review never sends emails or payments. This cloud option applies to Workflow centre and Knowledge desk. RAG drafts share the same global and visitor daily allowance as investigations; semantic search without generation does not consume cloud-model quota.
 
@@ -402,7 +448,7 @@ A live investigation using `gemma4:31b` on Ollama Cloud was verified on October 
 - Each signed visitor workspace has its own disk-backed Qdrant directory alongside its SQLite database. No shared collection mixes visitors. Index directories are removed when expired demo workspaces are cleaned up.
 - Embeddings run on the app server using `sentence-transformers/all-MiniLM-L6-v2` via FastEmbed/ONNX, with one CPU thread. Document text is not sent to an external embedding service. Cloud generation sends the question and retrieved passages to the configured Ollama account.
 - Results expose source and passage IDs, excerpts, offsets, country, tax year and cosine similarity. A score measures semantic similarity, not truth or tax correctness. A configurable retrieval pipeline is not equivalent to a tax-trained LLM.
-- Source ingestion currently accepts pasted text through the source library; automatic PDF parsing, OCR, website crawling and maintained CRA/IRS ingestion are future work.
+- Source ingestion accepts pasted text and the optional bundled CRA/IRS reference-summary import. Automatic PDF parsing, OCR, website crawling and scheduled CRA/IRS refresh are future work.
 
 The prototype limits each workspace to 40 approved sources and 1,200 passages, retrieving at most four above a 0.35 cosine score. This is an initial threshold, not a validated tax-domain acceptance threshold. Review source coverage and evaluate it with TMP accountants before production use. Citation validation checks identifier membership; it does not prove that every claim is supported. Unsupported queries can still retrieve a superficially similar passage, so inspect evidence and abstention behavior.
 
