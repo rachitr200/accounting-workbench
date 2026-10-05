@@ -222,3 +222,26 @@ def test_pilot_measurements_preserve_negative_results(ctx):
     assert post(c,'improvements',{**p,'weekly_runs':0}).status_code==422
     assert post(c,'improvements',{**p,'before_minutes':-1}).status_code==422
     assert post(c,'improvements',{**p,'area':'Invalid'}).status_code==422
+
+def test_operations_workflow_retry_and_review_boundary(ctx):
+    _,c=ctx
+    first=post(c,'workflows/operations',{'run_key':'daily:2026-10-05'}).json()
+    repeated=post(c,'workflows/operations',{'run_key':'daily:2026-10-05'}).json()
+    assert repeated['replayed'] and first['run_id']==repeated['run_id']
+    assert first['sent']==0 and first['followups']['created']>0
+    assert {'Onboarding','Payables','Reconciliation'}.issubset({x['area'] for x in first['exceptions']})
+    assert len(state(c)['workflow_runs'])==1
+    assert all(x['status']=='Review' for x in state(c)['invoices'] if x['kind']=='AP')
+    assert not any(x['match'] for x in state(c)['bank'])
+    next_run=post(c,'workflows/operations',{'run_key':'second-run'}).json()
+    assert next_run['followups']['created']==0
+    assert next_run['followups']['reused']==first['followups']['created']
+
+def test_operations_workflow_atomic_failure(ctx,monkeypatch):
+    m,c=ctx
+    def fail(*args):raise RuntimeError('simulated failure')
+    monkeypatch.setattr(m,'candidates',fail)
+    with pytest.raises(RuntimeError):post(c,'workflows/operations',{'run_key':'rollback-check'})
+    with m.database() as db:
+        assert db.execute('SELECT COUNT(*) FROM workflow_runs').fetchone()[0]==0
+        assert db.execute('SELECT COUNT(*) FROM drafts').fetchone()[0]==0

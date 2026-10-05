@@ -18,9 +18,11 @@ import {
   FileText,
   ShieldCheck,
 } from "lucide-react";
+import Workflows from "./Workflows";
 import Enablement from "./Enablement";
 const nav = [
   ["Overview", LayoutDashboard],
+  ["Workflow centre", ShieldCheck],
   ["Clients & leads", Users],
   ["Jobs & time", Clock],
   ["Reconciliation", ArrowLeftRight],
@@ -184,6 +186,7 @@ export default function App() {
     budget = data.jobs.reduce((n, j) => n + j.budget_minutes, 0);
   const summary = {
     Overview: "A clear view of the work that needs attention.",
+    "Workflow centre": "Run connected CRM and accounting checks, then review the results.",
     "Clients & leads": "Track relationships and complete client onboarding.",
     "Jobs & time": "Allocate staff time and spot budget overruns.",
     Reconciliation: "Compare sample bank activity with ledger entries.",
@@ -285,6 +288,7 @@ export default function App() {
             </div>
           )}
           {["Rollout & impact", "Staff playbook"].includes(page) && <Enablement page={page} data={data} act={act} busy={busy} />}
+          {page === "Workflow centre" && <Workflows data={data} act={act} busy={busy} />}
           {page === "Overview" && (
             <>
               <section className="stats">

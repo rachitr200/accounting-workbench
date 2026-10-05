@@ -78,6 +78,7 @@ def seed():
         CREATE TABLE IF NOT EXISTS drafts(id TEXT PRIMARY KEY,unique_key TEXT UNIQUE NOT NULL,recipient TEXT NOT NULL,subject TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT,at TEXT NOT NULL,action TEXT NOT NULL,detail TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,title TEXT NOT NULL,jurisdiction TEXT NOT NULL,tax_year INTEGER NOT NULL,body TEXT NOT NULL,source_url TEXT NOT NULL,approved INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS workflow_runs(id TEXT PRIMARY KEY,run_key TEXT UNIQUE NOT NULL,created_at TEXT NOT NULL,result TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS improvements(id TEXT PRIMARY KEY,title TEXT NOT NULL,area TEXT NOT NULL,weekly_runs INTEGER NOT NULL,before_minutes INTEGER NOT NULL,after_minutes INTEGER NOT NULL,evidence TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS rollout(id TEXT PRIMARY KEY,status TEXT NOT NULL,note TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -224,6 +225,7 @@ def candidates(c,b):
 @app.get('/api/state')
 def state():
     with database() as c:
+        c.execute('CREATE TABLE IF NOT EXISTS workflow_runs(id TEXT PRIMARY KEY,run_key TEXT UNIQUE NOT NULL,created_at TEXT NOT NULL,result TEXT NOT NULL)')
         clients=rows(c,'SELECT * FROM clients ORDER BY name')
         for x in clients:x['documents']=json.loads(x['documents'])
         jobs=rows(c,'SELECT j.*,c.name AS client_name,COALESCE(SUM(t.minutes),0) AS used_minutes FROM jobs j JOIN clients c ON c.id=j.client_id LEFT JOIN time_entries t ON t.job_id=j.id GROUP BY j.id')
@@ -233,7 +235,7 @@ def state():
         bank=rows(c,'SELECT * FROM bank ORDER BY id')
         for b in bank:
             b['match']=matches.get(b['id']); b['candidates']=[] if b['match'] else candidates(c,b)
-        return {'improvements':rows(c,'SELECT * FROM improvements ORDER BY rowid DESC'),'rollout':rows(c,'SELECT * FROM rollout'),'clients':clients,'jobs':jobs,'time_entries':rows(c,'SELECT * FROM time_entries ORDER BY work_date DESC'),'invoices':invoices,'bank':bank,'ledger':rows(c,'SELECT * FROM ledger'),'drafts':rows(c,'SELECT * FROM drafts ORDER BY created_at DESC'),'audit':rows(c,'SELECT * FROM audit ORDER BY id DESC LIMIT 100'),'sources':rows(c,'SELECT * FROM sources'),'model_configured':bool(os.environ.get('OLLAMA_MODEL')) and not PUBLIC_DEMO,'public_demo':PUBLIC_DEMO,'today':date.today().isoformat(),'mode':'Local demonstration; synthetic data; no email, bank, payment or tax-provider connection'}
+        return {'workflow_runs':[{**r,'result':json.loads(r['result'])} for r in rows(c,'SELECT * FROM workflow_runs ORDER BY rowid DESC LIMIT 30')],'improvements':rows(c,'SELECT * FROM improvements ORDER BY rowid DESC'),'rollout':rows(c,'SELECT * FROM rollout'),'clients':clients,'jobs':jobs,'time_entries':rows(c,'SELECT * FROM time_entries ORDER BY work_date DESC'),'invoices':invoices,'bank':bank,'ledger':rows(c,'SELECT * FROM ledger'),'drafts':rows(c,'SELECT * FROM drafts ORDER BY created_at DESC'),'audit':rows(c,'SELECT * FROM audit ORDER BY id DESC LIMIT 100'),'sources':rows(c,'SELECT * FROM sources'),'model_configured':bool(os.environ.get('OLLAMA_MODEL')) and not PUBLIC_DEMO,'public_demo':PUBLIC_DEMO,'today':date.today().isoformat(),'mode':'Local demonstration; synthetic data; no email, bank, payment or tax-provider connection'}
 
 @app.post('/api/clients')
 def create_client(p:ClientIn):
@@ -395,19 +397,21 @@ def import_transactions(p:ImportIn):
 
 @app.post('/api/automations/followups')
 def run_followups():
-    # Source checks and draft writes share a single transaction for a consistent batch.
-    created=0; reused=0
     with database(True) as c:
-        for x in rows(c,"SELECT * FROM clients WHERE stage='Onboarding'"):
-            missing=[d['name'] for d in json.loads(x['documents']) if not d['received']]
-            if not missing:continue
-            r=insert_draft(c,'client:'+x['id']+':'+date.today().isoformat()+':'+','.join(missing),x['email'],'Outstanding documents — '+x['name'],'Hello,\n\nPlease provide the following outstanding items:\n'+'\n'.join('- '+m for m in missing)+'\n\nIf already supplied, please let us know so we can check our records.\n\nThank you,\nAccounting team')
-            reused+=int(r['existing']);created+=int(not r['existing'])
-        for x in rows(c,"SELECT * FROM invoices WHERE kind='AR' AND status='Open' AND due_date<?",(date.today().isoformat(),)):
-            client=c.execute('SELECT email FROM clients WHERE name=?',(x['party'],)).fetchone()
-            r=insert_draft(c,'invoice:'+x['id']+':'+date.today().isoformat(),client['email'] if client else 'Recipient needs verification','Payment reminder — '+x['reference'],f'Hello,\n\nOur records show invoice {x["reference"]} for {x["currency"]} {x["amount_cents"]/100:,.2f}, due {x["due_date"]}, is outstanding. Please confirm the payment status. If already paid, please share the reference.\n\nThank you,\nAccounting team')
-            reused+=int(r['existing']);created+=int(not r['existing'])
-        audit(c,'Follow-up batch completed',f'{created} drafts created; {reused} reused. No messages sent.')
+        return prepare_followups(c)
+
+def prepare_followups(c):
+    created=0; reused=0
+    for x in rows(c,"SELECT * FROM clients WHERE stage='Onboarding'"):
+        missing=[d['name'] for d in json.loads(x['documents']) if not d['received']]
+        if not missing:continue
+        r=insert_draft(c,'client:'+x['id']+':'+date.today().isoformat()+':'+','.join(missing),x['email'],'Outstanding documents — '+x['name'],'Hello,\n\nPlease provide the following outstanding items:\n'+'\n'.join('- '+m for m in missing)+'\n\nIf already supplied, please let us know so we can check our records.\n\nThank you,\nAccounting team')
+        reused+=int(r['existing']);created+=int(not r['existing'])
+    for x in rows(c,"SELECT * FROM invoices WHERE kind='AR' AND status='Open' AND due_date<?",(date.today().isoformat(),)):
+        client=c.execute('SELECT email FROM clients WHERE name=?',(x['party'],)).fetchone()
+        r=insert_draft(c,'invoice:'+x['id']+':'+date.today().isoformat(),client['email'] if client else 'Recipient needs verification','Payment reminder — '+x['reference'],f'Hello,\n\nOur records show invoice {x["reference"]} for {x["currency"]} {x["amount_cents"]/100:,.2f}, due {x["due_date"]}, is outstanding. Please confirm the payment status. If already paid, please share the reference.\n\nThank you,\nAccounting team')
+        reused+=int(r['existing']);created+=int(not r['existing'])
+    audit(c,'Follow-up batch completed',f'{created} drafts created; {reused} reused. No messages sent.')
     return {'created':created,'reused':reused,'sent':0}
 
 
@@ -439,3 +443,35 @@ def rollout(ident:str,p:RolloutIn):
         c.execute('INSERT INTO rollout VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,note=excluded.note',(ident,p.status,p.note))
         audit(c,'Rollout check updated',ident+': '+p.status)
     return {'saved':True}
+
+
+class WorkflowIn(Strict):
+    run_key:str=Field(min_length=3,max_length=100,pattern=r'^[A-Za-z0-9_:-]+$')
+
+@app.post('/api/workflows/operations')
+def operations_workflow(p:WorkflowIn):
+    # One transaction makes retries safe even if a request loses its response.
+    with database(True) as c:
+        c.execute('CREATE TABLE IF NOT EXISTS workflow_runs(id TEXT PRIMARY KEY,run_key TEXT UNIQUE NOT NULL,created_at TEXT NOT NULL,result TEXT NOT NULL)')
+        previous=c.execute('SELECT * FROM workflow_runs WHERE run_key=?',(p.run_key,)).fetchone()
+        if previous:return {'run_id':previous['id'],'replayed':True,**json.loads(previous['result'])}
+        followups=prepare_followups(c)
+        exceptions=[]
+        for client in rows(c,"SELECT * FROM clients WHERE stage='Onboarding'"):
+            missing=[d['name'] for d in json.loads(client['documents']) if not d['received']]
+            if missing:exceptions.append({'area':'Onboarding','record':client['name'],'action':'Review document reminder','reason':', '.join(missing)})
+        for job in rows(c,'SELECT j.*,COALESCE(SUM(t.minutes),0) used FROM jobs j LEFT JOIN time_entries t ON t.job_id=j.id GROUP BY j.id'):
+            if job['used']>=job['budget_minutes']:
+                exceptions.append({'area':'Time budget','record':job['name'],'action':'Review job budget','reason':str(job['used'])+' of '+str(job['budget_minutes'])+' minutes used'})
+        duplicates=duplicate_ids(c)
+        for invoice in rows(c,'SELECT * FROM invoices'):
+            if invoice['id'] in duplicates:exceptions.append({'area':'Payables','record':invoice['reference'],'action':'Resolve possible duplicate','reason':invoice['party']})
+            if invoice['kind']=='AR' and invoice['status']=='Open' and invoice['due_date']<date.today().isoformat():
+                exceptions.append({'area':'Receivables','record':invoice['reference'],'action':'Review outstanding balance and draft','reason':'Due '+invoice['due_date']})
+        for bank in rows(c,'SELECT * FROM bank WHERE id NOT IN (SELECT bank_id FROM matches)'):
+            options=candidates(c,bank)
+            exceptions.append({'area':'Reconciliation','record':bank['id'],'action':'Review suggested match' if len(options)==1 else 'Investigate transaction','reason':str(len(options))+' eligible ledger candidates; approval required'})
+        result={'steps':[{'name':'Read CRM and accounting records','status':'Completed'},{'name':'Prepare missing-document and overdue reminders','status':'Completed'},{'name':'Check budgets, duplicates and reconciliation exceptions','status':'Completed'},{'name':'Staff review and external actions','status':'Awaiting review'}],'followups':followups,'exceptions':exceptions,'sent':0,'mode':'Rules-based workflow; no model invoked'}
+        ident=uid();c.execute('INSERT INTO workflow_runs VALUES (?,?,?,?)',(ident,p.run_key,now(),json.dumps(result)))
+        audit(c,'Operations workflow completed',ident+': '+str(len(exceptions))+' items for review; no external actions')
+    return {'run_id':ident,'replayed':False,**result}

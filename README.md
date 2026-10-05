@@ -332,7 +332,7 @@ Changing the hostname or setting `PUBLIC_DEMO=false` does not supply these capab
 npm --prefix frontend run build
 ```
 
-The current suite contains 22 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
+The current suite contains 24 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
 
 Live checks have confirmed frontend/API connectivity, saved sample records, separate visitor workspaces, and saved impact calculations. These checks do not establish compatibility with TMP’s CRM, production security, tax-answer accuracy, or performance at scale. Real model inference, live email delivery, bank connections, and payment integrations have not been validated.
 
@@ -342,3 +342,24 @@ Live checks have confirmed frontend/API connectivity, saved sample records, sepa
 - [Freight Bidding Agent](https://github.com/rachitr200/freight-bidding-agent): staged workflow, validation, and activity-tracking patterns.
 
 Accounting Workbench adds accounting-specific interfaces, SQLite persistence, review rules, imports, and tests. Its current workflows use deterministic operations and an optional model adapter; it does not use LangGraph.
+
+
+## Connected operations workflow
+
+Open **Workflow centre** and run the operations workflow. One database transaction prepares onboarding and overdue-invoice reminder drafts, checks exhausted job budgets, identifies possible duplicate payables, and collects unmatched bank transactions for review. The output includes ordered steps, counts, an exception list, and saved run history. All external actions remain pending staff review.
+
+`POST /api/workflows/operations` accepts `{"run_key":"operations:2026-10-05"}`. Repeating the same key returns the saved result without executing again. Use a new key after input changes; draft-level same-day duplicate prevention still applies. Any failure rolls back the entire transaction so the key can be retried. Run results are snapshots, not live task completion status. This endpoint uses deterministic rules; no AI model is invoked.
+
+### n8n template
+
+Import `integrations/n8n/tmp-operations.json` using n8n’s file-import option. This is a **manual, local evaluation template**, not an activated or tested n8n service connection.
+
+1. Run the workbench locally on port 8765 with synthetic data.
+2. Run n8n on the same host outside a container so the template’s loopback URL reaches the workbench.
+3. Import the JSON and execute Manual start. The HTTP node returns drafts prepared, review items, and the run ID.
+4. Inspect results in Workflow centre and review drafts in Reminder drafts.
+5. Reuse a run key when retrying the same logical event; the template uses the n8n execution ID. A new execution receives a new run key.
+
+An n8n Cloud instance or a separate container cannot reach the host application through its own loopback address. Do not expose local mode to the internet to work around this. Shared or scheduled operation requires an authenticated service interface, persistent workspace, approved network configuration, failure handling and support ownership. The public Render demo uses visitor cookies and is not the target for this template.
+
+After those integration requirements are implemented, a schedule or approved incoming event can replace the manual trigger. The next AI stages are document extraction and email classification into validated proposals, followed by human review. They are not implemented by this template. No email, payment or accounting posting is performed.

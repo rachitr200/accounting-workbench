@@ -1,0 +1,53 @@
+{
+  "name": "TMP Operations Review \u2014 Local Sample Workspace",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start",
+      "name": "Manual start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8765/api/workflows/operations",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({run_key: \"n8n:\" + $execution.id}) }}",
+        "options": {}
+      },
+      "id": "operations",
+      "name": "Prepare CRM and accounting review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Manual start": {
+      "main": [
+        [
+          {
+            "node": "Prepare CRM and accounting review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Toronto"
+  },
+  "active": false,
+  "pinData": {}
+}
