@@ -15,6 +15,7 @@ The latest release extends the operational workspace with connected workflow aut
 | Addition | How it works | Verification and boundary |
 | --- | --- | --- |
 | Connected operations workflow | Runs onboarding follow-ups, overdue receivable drafts, budget checks, duplicate-payable checks and reconciliation exceptions in one transaction; stores a run snapshot | Run-key retries return the saved result; no external messages, payments or ledger postings |
+| Scheduled background checks | Opt-in interval schedule runs operations checks without an open browser; stores next due time, last result and retry status | Runs while server is awake; atomic duplicate protection, catch-up and failure retry tested; free Render can sleep |
 | n8n integration template | Importable manual HTTP workflow for a local evaluation installation | Template supplied; a live n8n connection has not been exercised |
 | Bounded agent investigation | AI chooses read-only tools for clients, jobs, invoices and reconciliation; produces a structured proposal with inspected evidence | At most five model steps; validated output; no arbitrary code or write tools |
 | Accountant decisions | Approve or reject the proposal with notes; a digest prevents approving stale accounting evidence | Decisions are recorded only; reviewer labels are not authenticated staff identities |
@@ -34,7 +35,7 @@ The latest release extends the operational workspace with connected workflow aut
 5. Ask a question such as “Which accounting documents should businesses organize?” for Canada, or “How long should employment tax records be retained?” for the United States.
 6. Select cloud drafting when needed. Read the retrieved passage, official source link and citations; have an accountant review the answer.
 
-**Release checks:** 37 automated tests passed and the frontend production build passed. Live checks confirmed cloud investigation, decision recording, semantic retrieval, country filtering, a cited cloud RAG answer, and starter-reference import. A local real-embedding check retrieved the correct CRA and IRS summaries for their respective questions. These checks establish application behavior and connectivity, not tax-advice accuracy or compatibility with TMP’s existing CRM.
+**Release checks:** 41 automated tests passed and the frontend production build passed. Live checks confirmed cloud investigation, decision recording, semantic retrieval, country filtering, a cited cloud RAG answer, and starter-reference import. A local real-embedding check retrieved the correct CRA and IRS summaries for their respective questions. These checks establish application behavior and connectivity, not tax-advice accuracy or compatibility with TMP’s existing CRM.
 
 ### Remaining integration work
 
@@ -380,7 +381,7 @@ Changing the hostname or setting `PUBLIC_DEMO=false` does not supply these capab
 npm --prefix frontend run build
 ```
 
-The current suite contains 37 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
+The current suite contains 41 passing tests covering onboarding gates, draft deduplication, duplicate payables, matching constraints, atomic imports, integer-value validation, time limits, source filtering, mocked model responses, persistence, mocked SMTP behavior, separate public sessions, throttling, rollout evidence, and pilot measurement validation. GitHub Actions runs the tests and frontend build.
 
 Live checks have confirmed frontend/API connectivity, saved sample records, separate visitor workspaces, and saved impact calculations. These checks do not establish compatibility with TMP’s CRM, production security, tax-answer accuracy, or performance at scale. A live Ollama Cloud workflow investigation and review-recording round trip was verified on October 5, 2026 using synthetic records. A live semantic RAG round trip was also verified on October 5, 2026: MiniLM embedded the approved sample onboarding procedure into Qdrant, a paraphrased question retrieved it, the country filter excluded it for a U.S. query, and Ollama Cloud returned a draft citing the retrieved passage. The Knowledge desk displayed the cited answer and similarity score. Live email delivery, bank connections, and payment integrations have not been validated.
 
@@ -466,3 +467,15 @@ Knowledge desk → **Add CRA / IRS references** imports two concise, source-link
 - IRS: https://www.irs.gov/businesses/small-businesses-self-employed/recordkeeping
 
 Example: select United States, 2026, and ask “What records support business income and expenses?” Answers still require accountant review. This starter library is not the Income Tax Act, a complete CRA/IRS corpus, or an automatically updated feed. Expansion needs reviewed source documents, effective dates, refresh ownership and a tax-expert evaluation set.
+
+## Scheduled background operations
+
+**Workflow centre → Scheduled background checks** enables automatic draft preparation and accounting exception checks. Choose every 15 minutes, hour, 6 hours or 24 hours and save. Scheduling is off by default. Enabling or changing a schedule makes its first run due immediately; the server checks every 30 seconds. Refresh the page to see the last successful run, next due time, failures and run history. Disable and save to stop future runs.
+
+The application lifespan starts one background thread per server process. It runs the same deterministic operations function as the manual workflow, without invoking cloud AI, sending messages, making payments or posting ledger entries. A SQLite write transaction commits the run, drafts and next due time together. The key `scheduled:<due timestamp>` prevents duplicate execution; concurrent attempts serialize. A failed transaction rolls back and retries the same due slot with exponential delay from 60 seconds to one hour. Failure status is shown in the workspace; technical details are logged on the server, not sent as external alerts.
+
+Schedule configuration and results are stored in each workspace SQLite database. In public mode, visitor schedules expire 24 hours after activation, use only their own records, and do not act on the shared default database. Local schedules do not expire. On restart, a retained overdue schedule performs one catch-up run and advances to the next future interval rather than replaying every missed interval. This is an elapsed-time schedule, not a timezone-aware daily calendar trigger.
+
+**Hosting boundary:** closing the browser does not stop an awake server. A sleeping or stopped free Render service cannot execute jobs or wake itself; ephemeral storage may also reset schedules on redeployment. Use an always-on service and persistent storage for dependable scheduling. No paid hosting change is made by this feature. This embedded scheduler is for a small single-worker prototype; production needs authenticated schedule ownership, a durable worker/queue, monitoring and appropriate multi-instance coordination.
+
+Tests cover due-time gating, concurrent duplicate prevention, disable controls, missed-interval catch-up, transactional failure rollback and retry, visitor isolation and public schedule expiry.

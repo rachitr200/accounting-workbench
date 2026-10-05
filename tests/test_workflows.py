@@ -407,3 +407,68 @@ def test_official_reference_import_is_idempotent_and_scoped(ctx):
     assert all('2026-10-05' in x['body'] and x['source_url'].startswith('https://') for x in sources)
     answer=post(c,'knowledge/ask',{'question':'employment tax records four years','jurisdiction':'US','tax_year':2026}).json()
     assert any(x['id']=='official-irs-records-v1' for x in answer['citations'])
+
+
+def test_schedule_due_atomic_repeat_and_disable(ctx):
+    m,c=ctx
+    assert not state(c)['schedule']['enabled']
+    assert post(c,'workflows/schedule',{'enabled':True,'interval_minutes':14}).status_code==422
+    schedule=post(c,'workflows/schedule',{'enabled':True,'interval_minutes':15}).json()
+    due=schedule['next_run_at']
+    assert not m.run_scheduled_workspace(m.DB,due-1)
+    assert m.run_scheduled_workspace(m.DB,due)
+    assert not m.run_scheduled_workspace(m.DB,due)
+    result=state(c)
+    assert len(result['workflow_runs'])==1
+    assert result['workflow_runs'][0]['run_key']=='scheduled:'+str(due)
+    assert result['workflow_runs'][0]['result']['sent']==0
+    assert result['schedule']['next_run_at']==due+900
+    post(c,'workflows/schedule',{'enabled':False,'interval_minutes':15})
+    assert not m.run_scheduled_workspace(m.DB,due+900)
+
+
+def test_schedule_missed_intervals_consolidate_and_concurrent_runs(ctx):
+    from concurrent.futures import ThreadPoolExecutor
+    m,c=ctx
+    due=post(c,'workflows/schedule',{'enabled':True,'interval_minutes':15}).json()['next_run_at']
+    at=due+3600
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results=list(pool.map(lambda _:m.run_scheduled_workspace(m.DB,at),range(2)))
+    assert sum(results)==1
+    assert len(state(c)['workflow_runs'])==1
+    assert state(c)['schedule']['next_run_at']==due+4500
+
+
+def test_schedule_failure_rolls_back_and_retries_same_due(ctx,monkeypatch):
+    m,c=ctx
+    due=post(c,'workflows/schedule',{'enabled':True,'interval_minutes':15}).json()['next_run_at']
+    original=m.execute_operations
+    def fail(c,key):
+        original(c,key)
+        raise RuntimeError('test failure after workflow writes')
+    monkeypatch.setattr(m,'execute_operations',fail)
+    assert not m.run_scheduled_workspace(m.DB,due)
+    snapshot=state(c)
+    assert not snapshot['workflow_runs'] and not snapshot['drafts']
+    assert snapshot['schedule']['failures']==1 and snapshot['schedule']['retry_at']==due+60
+    monkeypatch.setattr(m,'execute_operations',original)
+    assert not m.run_scheduled_workspace(m.DB,due+59)
+    assert m.run_scheduled_workspace(m.DB,due+60)
+    assert state(c)['schedule']['failures']==0
+    assert state(c)['workflow_runs'][0]['run_key']=='scheduled:'+str(due)
+
+
+def test_public_schedule_uses_only_own_workspace_and_expires(ctx,monkeypatch):
+    m,c=ctx
+    monkeypatch.setattr(m,'PUBLIC_DEMO',True)
+    token=m.ACTIVE_DB.set(m.SESSION_ROOT/'scheduler-test.sqlite3')
+    try:
+        m.seed()
+        schedule=m.set_schedule(m.ScheduleIn(enabled=True,interval_minutes=15))
+        due=schedule['next_run_at']
+        assert m.run_scheduled_workspace(m.ACTIVE_DB.get(),due)
+        assert not m.run_scheduled_workspace(m.ACTIVE_DB.get(),schedule['expires_at'])
+        with m.database() as db:
+            assert not m.schedule_record(db)['enabled']
+    finally:m.ACTIVE_DB.reset(token)
+    assert not state(c)['workflow_runs'] and not state(c)['schedule']['enabled']

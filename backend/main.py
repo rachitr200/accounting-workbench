@@ -1,5 +1,5 @@
 """Local demonstration workbench. Uses synthetic records; never sends email or payments."""
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from contextvars import ContextVar
 import hashlib, hmac, secrets, time
 from collections import defaultdict, deque
@@ -14,6 +14,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from backend import rag
 import shutil
+import threading, logging
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = Path(os.environ.get('WORKBENCH_DB', str(ROOT / 'data' / 'workbench.sqlite3')))
@@ -37,7 +38,13 @@ def session_id(cookie):
     if not re.fullmatch(r'[a-f0-9]{32}', ident): return None
     return ident if hmac.compare_digest(signed_session(ident), cookie) else None
 
-app = FastAPI(title='Accounting Workbench — demonstration', version='1.0.0')
+@asynccontextmanager
+async def app_lifespan(app):
+    start_scheduler()
+    try:yield
+    finally:stop_scheduler()
+
+app = FastAPI(lifespan=app_lifespan,title='Accounting Workbench — demonstration', version='1.0.0')
 hosts=['127.0.0.1','localhost','testserver']
 if os.environ.get('RENDER_EXTERNAL_HOSTNAME'): hosts.append(os.environ['RENDER_EXTERNAL_HOSTNAME'])
 hosts += [h.strip() for h in os.environ.get('WORKBENCH_ALLOWED_HOSTS','').split(',') if h.strip()]
@@ -227,6 +234,23 @@ def candidates(c,b):
         result.append({**l,'reference_match':exact,'reason':f'Amount and currency match; dates {days} day(s) apart'+('; reference matches' if exact else '; reference needs review')})
     return sorted(result,key=lambda x:not x['reference_match'])
 
+def schedule_record(c):
+    c.execute("CREATE TABLE IF NOT EXISTS workflow_schedule(id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL,interval_minutes INTEGER NOT NULL,next_run_at INTEGER,last_run_at INTEGER,last_run_id TEXT,last_error TEXT NOT NULL DEFAULT '',failures INTEGER NOT NULL DEFAULT 0,retry_at INTEGER,expires_at INTEGER)")
+    c.execute("INSERT OR IGNORE INTO workflow_schedule(id,enabled,interval_minutes) VALUES (1,0,1440)")
+    return dict(c.execute('SELECT * FROM workflow_schedule WHERE id=1').fetchone())
+
+class ScheduleIn(Strict):
+    enabled:bool
+    interval_minutes:int=Field(ge=15,le=1440)
+
+@app.post('/api/workflows/schedule')
+def set_schedule(p:ScheduleIn):
+    with database(True) as c:
+        schedule_record(c)
+        c.execute("UPDATE workflow_schedule SET enabled=?,interval_minutes=?,next_run_at=?,expires_at=?,retry_at=NULL,failures=0,last_error='' WHERE id=1",(int(p.enabled),p.interval_minutes,int(time.time()) if p.enabled else None,int(time.time())+SESSION_TTL if PUBLIC_DEMO and p.enabled else None))
+        audit(c,'Background schedule updated',f'{"Enabled" if p.enabled else "Disabled"}; every {p.interval_minutes} minutes; draft preparation only')
+        return schedule_record(c)
+
 @app.get('/api/state')
 def state():
     with database() as c:
@@ -241,7 +265,7 @@ def state():
         for b in bank:
             b['match']=matches.get(b['id']); b['candidates']=[] if b['match'] else candidates(c,b)
         c.execute('CREATE TABLE IF NOT EXISTS agent_reviews(id TEXT PRIMARY KEY,run_id TEXT UNIQUE NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL,decision TEXT NOT NULL)')
-        return {'agent_reviews':[{**r,'payload':json.loads(r['payload']),'decision':json.loads(r['decision'])} for r in rows(c,'SELECT * FROM agent_reviews ORDER BY rowid DESC LIMIT 30')],'workflow_runs':[{**r,'result':json.loads(r['result'])} for r in rows(c,'SELECT * FROM workflow_runs ORDER BY rowid DESC LIMIT 30')],'improvements':rows(c,'SELECT * FROM improvements ORDER BY rowid DESC'),'rollout':rows(c,'SELECT * FROM rollout'),'clients':clients,'jobs':jobs,'time_entries':rows(c,'SELECT * FROM time_entries ORDER BY work_date DESC'),'invoices':invoices,'bank':bank,'ledger':rows(c,'SELECT * FROM ledger'),'drafts':rows(c,'SELECT * FROM drafts ORDER BY created_at DESC'),'audit':rows(c,'SELECT * FROM audit ORDER BY id DESC LIMIT 100'),'sources':rows(c,'SELECT * FROM sources'),'model_configured':agent_configured(),'knowledge_model_configured':agent_configured(),'public_demo':PUBLIC_DEMO,'today':date.today().isoformat(),'mode':'Local demonstration; synthetic data; no email, bank, payment or tax-provider connection'}
+        return {'schedule':schedule_record(c),'agent_reviews':[{**r,'payload':json.loads(r['payload']),'decision':json.loads(r['decision'])} for r in rows(c,'SELECT * FROM agent_reviews ORDER BY rowid DESC LIMIT 30')],'workflow_runs':[{**r,'result':json.loads(r['result'])} for r in rows(c,'SELECT * FROM workflow_runs ORDER BY rowid DESC LIMIT 30')],'improvements':rows(c,'SELECT * FROM improvements ORDER BY rowid DESC'),'rollout':rows(c,'SELECT * FROM rollout'),'clients':clients,'jobs':jobs,'time_entries':rows(c,'SELECT * FROM time_entries ORDER BY work_date DESC'),'invoices':invoices,'bank':bank,'ledger':rows(c,'SELECT * FROM ledger'),'drafts':rows(c,'SELECT * FROM drafts ORDER BY created_at DESC'),'audit':rows(c,'SELECT * FROM audit ORDER BY id DESC LIMIT 100'),'sources':rows(c,'SELECT * FROM sources'),'model_configured':agent_configured(),'knowledge_model_configured':agent_configured(),'public_demo':PUBLIC_DEMO,'today':date.today().isoformat(),'mode':'Local demonstration; synthetic data; no email, bank, payment or tax-provider connection'}
 
 @app.post('/api/clients')
 def create_client(p:ClientIn):
@@ -489,30 +513,32 @@ class WorkflowIn(Strict):
 
 @app.post('/api/workflows/operations')
 def operations_workflow(p:WorkflowIn):
-    # One transaction makes retries safe even if a request loses its response.
     with database(True) as c:
-        c.execute('CREATE TABLE IF NOT EXISTS workflow_runs(id TEXT PRIMARY KEY,run_key TEXT UNIQUE NOT NULL,created_at TEXT NOT NULL,result TEXT NOT NULL)')
-        previous=c.execute('SELECT * FROM workflow_runs WHERE run_key=?',(p.run_key,)).fetchone()
-        if previous:return {'run_id':previous['id'],'replayed':True,**json.loads(previous['result'])}
-        followups=prepare_followups(c)
-        exceptions=[]
-        for client in rows(c,"SELECT * FROM clients WHERE stage='Onboarding'"):
-            missing=[d['name'] for d in json.loads(client['documents']) if not d['received']]
-            if missing:exceptions.append({'area':'Onboarding','record':client['name'],'action':'Review document reminder','reason':', '.join(missing)})
-        for job in rows(c,'SELECT j.*,COALESCE(SUM(t.minutes),0) used FROM jobs j LEFT JOIN time_entries t ON t.job_id=j.id GROUP BY j.id'):
-            if job['used']>=job['budget_minutes']:
-                exceptions.append({'area':'Time budget','record':job['name'],'action':'Review job budget','reason':str(job['used'])+' of '+str(job['budget_minutes'])+' minutes used'})
-        duplicates=duplicate_ids(c)
-        for invoice in rows(c,'SELECT * FROM invoices'):
-            if invoice['id'] in duplicates:exceptions.append({'area':'Payables','record':invoice['reference'],'action':'Resolve possible duplicate','reason':invoice['party']})
-            if invoice['kind']=='AR' and invoice['status']=='Open' and invoice['due_date']<date.today().isoformat():
-                exceptions.append({'area':'Receivables','record':invoice['reference'],'action':'Review outstanding balance and draft','reason':'Due '+invoice['due_date']})
-        for bank in rows(c,'SELECT * FROM bank WHERE id NOT IN (SELECT bank_id FROM matches)'):
-            options=candidates(c,bank)
-            exceptions.append({'area':'Reconciliation','record':bank['id'],'action':'Review suggested match' if len(options)==1 else 'Investigate transaction','reason':str(len(options))+' eligible ledger candidates; approval required'})
-        result={'steps':[{'name':'Read CRM and accounting records','status':'Completed'},{'name':'Prepare missing-document and overdue reminders','status':'Completed'},{'name':'Check budgets, duplicates and reconciliation exceptions','status':'Completed'},{'name':'Staff review and external actions','status':'Awaiting review'}],'followups':followups,'exceptions':exceptions,'sent':0,'mode':'Rules-based workflow; no model invoked'}
-        ident=uid();c.execute('INSERT INTO workflow_runs VALUES (?,?,?,?)',(ident,p.run_key,now(),json.dumps(result)))
-        audit(c,'Operations workflow completed',ident+': '+str(len(exceptions))+' items for review; no external actions')
+        return execute_operations(c,p.run_key)
+
+def execute_operations(c,run_key):
+    c.execute('CREATE TABLE IF NOT EXISTS workflow_runs(id TEXT PRIMARY KEY,run_key TEXT UNIQUE NOT NULL,created_at TEXT NOT NULL,result TEXT NOT NULL)')
+    previous=c.execute('SELECT * FROM workflow_runs WHERE run_key=?',(run_key,)).fetchone()
+    if previous:return {'run_id':previous['id'],'replayed':True,**json.loads(previous['result'])}
+    followups=prepare_followups(c)
+    exceptions=[]
+    for client in rows(c,"SELECT * FROM clients WHERE stage='Onboarding'"):
+        missing=[d['name'] for d in json.loads(client['documents']) if not d['received']]
+        if missing:exceptions.append({'area':'Onboarding','record':client['name'],'action':'Review document reminder','reason':', '.join(missing)})
+    for job in rows(c,'SELECT j.*,COALESCE(SUM(t.minutes),0) used FROM jobs j LEFT JOIN time_entries t ON t.job_id=j.id GROUP BY j.id'):
+        if job['used']>=job['budget_minutes']:
+            exceptions.append({'area':'Time budget','record':job['name'],'action':'Review job budget','reason':str(job['used'])+' of '+str(job['budget_minutes'])+' minutes used'})
+    duplicates=duplicate_ids(c)
+    for invoice in rows(c,'SELECT * FROM invoices'):
+        if invoice['id'] in duplicates:exceptions.append({'area':'Payables','record':invoice['reference'],'action':'Resolve possible duplicate','reason':invoice['party']})
+        if invoice['kind']=='AR' and invoice['status']=='Open' and invoice['due_date']<date.today().isoformat():
+            exceptions.append({'area':'Receivables','record':invoice['reference'],'action':'Review outstanding balance and draft','reason':'Due '+invoice['due_date']})
+    for bank in rows(c,'SELECT * FROM bank WHERE id NOT IN (SELECT bank_id FROM matches)'):
+        options=candidates(c,bank)
+        exceptions.append({'area':'Reconciliation','record':bank['id'],'action':'Review suggested match' if len(options)==1 else 'Investigate transaction','reason':str(len(options))+' eligible ledger candidates; approval required'})
+    result={'steps':[{'name':'Read CRM and accounting records','status':'Completed'},{'name':'Prepare missing-document and overdue reminders','status':'Completed'},{'name':'Check budgets, duplicates and reconciliation exceptions','status':'Completed'},{'name':'Staff review and external actions','status':'Awaiting review'}],'followups':followups,'exceptions':exceptions,'sent':0,'mode':'Rules-based workflow; no model invoked'}
+    ident=uid();c.execute('INSERT INTO workflow_runs VALUES (?,?,?,?)',(ident,run_key,now(),json.dumps(result)))
+    audit(c,'Operations workflow completed',ident+': '+str(len(exceptions))+' items for review; no external actions')
     return {'run_id':ident,'replayed':False,**result}
 
 
@@ -648,3 +674,65 @@ def decide_agent_review(ident:str,p:AgentDecision):
         c.execute('UPDATE agent_reviews SET status=?,decision=? WHERE id=?',(p.decision,json.dumps(decision),ident))
         audit(c,'AI proposal '+p.decision.lower(),ident+'; reviewer label: '+p.reviewer+'; no external actions')
     return {'saved':True,'executed':False}
+
+
+SCHEDULER_STOP=threading.Event()
+SCHEDULER_THREAD=None
+
+def run_scheduled_workspace(path,at=None):
+    """Commit a due run and schedule advancement atomically; replay safely after crashes."""
+    at=int(time.time()) if at is None else at
+    if not path.exists():return False
+    token=ACTIVE_DB.set(path)
+    try:
+        with database(True) as c:
+            if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_schedule'").fetchone():return False
+            schedule=schedule_record(c)
+            if schedule['expires_at'] and schedule['expires_at']<=at:
+                c.execute('UPDATE workflow_schedule SET enabled=0,next_run_at=NULL,retry_at=NULL WHERE id=1')
+                return False
+            if not schedule['enabled'] or schedule['next_run_at'] is None or schedule['next_run_at']>at or (schedule['retry_at'] and schedule['retry_at']>at):return False
+            due=schedule['next_run_at']
+            result=execute_operations(c,'scheduled:'+str(due))
+            interval=schedule['interval_minutes']*60
+            next_due=due+((at-due)//interval+1)*interval
+            c.execute("UPDATE workflow_schedule SET next_run_at=?,last_run_at=?,last_run_id=?,last_error='',failures=0,retry_at=NULL WHERE id=1",(next_due,at,result['run_id']))
+            audit(c,'Scheduled workflow completed',result['run_id']+'; drafts and exceptions only; no cloud AI or external actions')
+        return True
+    except Exception:
+        logging.getLogger(__name__).exception('Scheduled operations failed')
+        try:
+            with database(True) as c:
+                record=schedule_record(c)
+                if record['enabled']:
+                    failures=min(record['failures']+1,20)
+                    c.execute('UPDATE workflow_schedule SET failures=?,last_error=?,retry_at=? WHERE id=1',(failures,'Scheduled run failed. Check server logs and workspace records; the run will retry.',at+min(60*2**(failures-1),3600)))
+        except Exception:logging.getLogger(__name__).exception('Unable to record scheduled failure')
+        return False
+    finally:ACTIVE_DB.reset(token)
+
+def scheduler_tick(at=None):
+    at=int(time.time()) if at is None else at
+    paths=list(SESSION_ROOT.glob('*.sqlite3')) if PUBLIC_DEMO else [DB]
+    for path in paths:
+        # Do not keep expired public workspaces alive through background writes.
+        try:
+            if PUBLIC_DEMO and at-path.stat().st_mtime>SESSION_TTL:continue
+        except FileNotFoundError:continue
+        run_scheduled_workspace(path,at)
+
+def scheduler_loop():
+    while not SCHEDULER_STOP.is_set():
+        try:scheduler_tick()
+        except Exception:logging.getLogger(__name__).exception('Background scheduler tick failed')
+        SCHEDULER_STOP.wait(30)
+
+def start_scheduler():
+    global SCHEDULER_THREAD
+    SCHEDULER_STOP.clear()
+    SCHEDULER_THREAD=threading.Thread(target=scheduler_loop,name='operations-scheduler',daemon=True)
+    SCHEDULER_THREAD.start()
+
+def stop_scheduler():
+    SCHEDULER_STOP.set()
+    if SCHEDULER_THREAD:SCHEDULER_THREAD.join(timeout=20)
